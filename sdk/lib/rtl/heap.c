@@ -2315,7 +2315,7 @@ BOOLEAN NTAPI RtlFreeHeap(
     _SEH2_TRY
     {
         /* Check this entry, fail if it's invalid */
-        if (!(HeapEntry->Flags & HEAP_ENTRY_BUSY) ||
+        if (!(((volatile HEAP_ENTRY*)HeapEntry)->Flags & HEAP_ENTRY_BUSY) ||
             (((ULONG_PTR)Ptr & 0x7) != 0) ||
             (HeapEntry->SegmentOffset >= HEAP_SEGMENTS))
         {

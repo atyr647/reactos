@@ -1253,11 +1253,13 @@ LdrShutdownThread(VOID)
         Teb->FlsData = NULL;
     }
 
-    /* Check for Fiber data */
+    /* Check for Fiber data. NtTib.FiberData is a union with NtTib.Version,
+       so for a non-fiber thread it holds the TEB version (0x1e00), not a
+       heap pointer, and must not be passed to RtlFreeHeap. */
 #if (NTDDI_VERSION < NTDDI_LONGHORN)
-    if (!Teb->HasFiberData)
+    if (Teb->HasFiberData)
 #else
-    if (!Teb->DbgHasFiberData)
+    if (Teb->DbgHasFiberData)
 #endif
     {
         /* Free Fiber data*/
