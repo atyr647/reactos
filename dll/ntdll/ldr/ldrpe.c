@@ -916,9 +916,16 @@ LdrpLoadImportModule(IN PWSTR DllPath OPTIONAL,
         goto done;
     }
 
+    /* Set up implicit TLS for modules loaded after process start
+       (process start is handled by LdrpInitializeTls) */
+    Status = STATUS_SUCCESS;
+    if (!LdrpInLdrInit)
+        Status = LdrpHandleTlsData(*DataTableEntry);
+
     /* Walk its import descriptor table */
-    Status = LdrpWalkImportDescriptor(DllPath,
-                                      *DataTableEntry);
+    if (NT_SUCCESS(Status))
+        Status = LdrpWalkImportDescriptor(DllPath,
+                                          *DataTableEntry);
     if (!NT_SUCCESS(Status))
     {
         /* Add it to the in-init-order list in case of failure */
