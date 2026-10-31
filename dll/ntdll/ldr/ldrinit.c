@@ -1370,9 +1370,11 @@ LdrpAllocateTls(VOID)
         /* Allocate this vector */
         TlsDataSize = TlsData->TlsDirectory.EndAddressOfRawData -
                       TlsData->TlsDirectory.StartAddressOfRawData;
+        /* The block also holds SizeOfZeroFill zero bytes after the initialized data */
         TlsVector[TlsData->TlsDirectory.Characteristics] = RtlAllocateHeap(RtlGetProcessHeap(),
-                                                                           0,
-                                                                           TlsDataSize);
+                                                                           HEAP_ZERO_MEMORY,
+                                                                           TlsDataSize +
+                                                                           TlsData->TlsDirectory.SizeOfZeroFill);
         if (!TlsVector[TlsData->TlsDirectory.Characteristics])
         {
             /* Out of memory */
@@ -1398,6 +1400,179 @@ LdrpAllocateTls(VOID)
 
     /* Done */
     return STATUS_SUCCESS;
+}
+
+/*
+ * Give one thread a TLS block for a newly loaded module, growing the
+ * thread's TLS vector if needed. The old vector is intentionally not freed:
+ * another thread may be reading it while we swap in the new one.
+ */
+static
+NTSTATUS
+LdrpTlsAddToTeb(IN PTEB Teb,
+                IN ULONG Index,
+                IN PLDRP_TLS_DATA TlsData)
+{
+    PVOID *Old, *New, Block;
+    SIZE_T RawSize, OldCount = 0;
+
+    RawSize = TlsData->TlsDirectory.EndAddressOfRawData -
+              TlsData->TlsDirectory.StartAddressOfRawData;
+
+    New = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY, (Index + 1) * sizeof(PVOID));
+    Block = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY,
+                            RawSize + TlsData->TlsDirectory.SizeOfZeroFill + sizeof(PVOID));
+    if (!New || !Block)
+    {
+        if (New) RtlFreeHeap(RtlGetProcessHeap(), 0, New);
+        if (Block) RtlFreeHeap(RtlGetProcessHeap(), 0, Block);
+        return STATUS_NO_MEMORY;
+    }
+
+    RtlCopyMemory(Block, (PVOID)(ULONG_PTR)TlsData->TlsDirectory.StartAddressOfRawData, RawSize);
+
+    Old = Teb->ThreadLocalStoragePointer;
+    if (Old)
+    {
+        OldCount = RtlSizeHeap(RtlGetProcessHeap(), 0, Old) / sizeof(PVOID);
+        if (OldCount > Index) OldCount = Index;
+        RtlCopyMemory(New, Old, OldCount * sizeof(PVOID));
+    }
+    New[Index] = Block;
+    Teb->ThreadLocalStoragePointer = New;
+    return STATUS_SUCCESS;
+}
+
+/*
+ * Implicit TLS (__declspec(thread), C++ function-local statics) for a module
+ * that is loaded after the process has started. This is what Windows Vista and
+ * later do: assign a TLS index, store it in the module's index variable, and
+ * give every existing thread a block initialized from the TLS template.
+ * Must be called with the loader lock held.
+ *
+ * Limitation: such a module is pinned (it will not be unloaded), because the
+ * per-thread blocks are not released on FreeLibrary.
+ */
+NTSTATUS
+NTAPI
+LdrpHandleTlsData(IN PLDR_DATA_TABLE_ENTRY LdrEntry)
+{
+    PIMAGE_TLS_DIRECTORY TlsDirectory;
+    PLDRP_TLS_DATA TlsData;
+    PSYSTEM_PROCESS_INFORMATION Process;
+    PSYSTEM_THREAD_INFORMATION Thread;
+    PTEB MyTeb = NtCurrentTeb();
+    PVOID Buffer = NULL;
+    ULONG Size, Index, Needed, BufferSize = 0x8000, i, Attempt;
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    TlsDirectory = RtlImageDirectoryEntryToData(LdrEntry->DllBase,
+                                                TRUE,
+                                                IMAGE_DIRECTORY_ENTRY_TLS,
+                                                &Size);
+    if (!TlsDirectory) return STATUS_SUCCESS;
+
+    /* Already handled (static TLS at process start) */
+    if (LdrEntry->TlsIndex) return STATUS_SUCCESS;
+
+    TlsData = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*TlsData));
+    if (!TlsData) return STATUS_NO_MEMORY;
+    TlsData->TlsDirectory = *TlsDirectory;
+    Index = LdrpNumberOfTlsEntries;
+    TlsData->TlsDirectory.Characteristics = Index;
+
+    /* Take a snapshot of this process' threads */
+    for (Attempt = 0; Attempt < 5; Attempt++)
+    {
+        Buffer = RtlAllocateHeap(RtlGetProcessHeap(), 0, BufferSize);
+        if (!Buffer)
+        {
+            Status = STATUS_NO_MEMORY;
+            goto Fail;
+        }
+        Status = NtQuerySystemInformation(SystemProcessInformation, Buffer, BufferSize, &Needed);
+        if (Status != STATUS_INFO_LENGTH_MISMATCH) break;
+        RtlFreeHeap(RtlGetProcessHeap(), 0, Buffer);
+        Buffer = NULL;
+        BufferSize = Needed + 0x4000;
+    }
+    if (!NT_SUCCESS(Status) || !Buffer) goto Fail;
+
+    Process = Buffer;
+    while (Process->UniqueProcessId != MyTeb->ClientId.UniqueProcess)
+    {
+        if (!Process->NextEntryOffset)
+        {
+            Process = NULL;
+            break;
+        }
+        Process = (PSYSTEM_PROCESS_INFORMATION)((PUCHAR)Process + Process->NextEntryOffset);
+    }
+
+    /* Always cover the calling thread, even if the snapshot did not list it */
+    Status = LdrpTlsAddToTeb(MyTeb, Index, TlsData);
+    if (!NT_SUCCESS(Status)) goto Fail;
+
+    if (Process)
+    {
+        Thread = (PSYSTEM_THREAD_INFORMATION)(Process + 1);
+        for (i = 0; i < Process->NumberOfThreads; i++, Thread++)
+        {
+            HANDLE ThreadHandle;
+            OBJECT_ATTRIBUTES ObjectAttributes;
+            THREAD_BASIC_INFORMATION BasicInfo;
+            NTSTATUS ThreadStatus;
+
+            if (Thread->ClientId.UniqueThread == MyTeb->ClientId.UniqueThread) continue;
+
+            InitializeObjectAttributes(&ObjectAttributes, NULL, 0, NULL, NULL);
+            ThreadStatus = NtOpenThread(&ThreadHandle,
+                                        THREAD_QUERY_INFORMATION,
+                                        &ObjectAttributes,
+                                        &Thread->ClientId);
+            if (!NT_SUCCESS(ThreadStatus)) continue; /* thread is gone */
+
+            ThreadStatus = NtQueryInformationThread(ThreadHandle,
+                                                    ThreadBasicInformation,
+                                                    &BasicInfo,
+                                                    sizeof(BasicInfo),
+                                                    NULL);
+            NtClose(ThreadHandle);
+            if (!NT_SUCCESS(ThreadStatus) || !BasicInfo.TebBaseAddress) continue;
+
+            _SEH2_TRY
+            {
+                ThreadStatus = LdrpTlsAddToTeb(BasicInfo.TebBaseAddress, Index, TlsData);
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                ThreadStatus = STATUS_SUCCESS; /* the thread exited under us */
+            }
+            _SEH2_END;
+
+            if (!NT_SUCCESS(ThreadStatus))
+            {
+                Status = ThreadStatus;
+                goto Fail;
+            }
+        }
+    }
+
+    /* Commit: publish the index to the module and to the TLS list */
+    InsertTailList(&LdrpTlsList, &TlsData->TlsLinks);
+    *(PLONG)(ULONG_PTR)TlsDirectory->AddressOfIndex = Index;
+    LdrpNumberOfTlsEntries = Index + 1;
+    LdrpImageHasTls = TRUE;
+    LdrEntry->TlsIndex = -1;
+    LdrEntry->LoadCount = 0xFFFF; /* pinned */
+
+    RtlFreeHeap(RtlGetProcessHeap(), 0, Buffer);
+    return STATUS_SUCCESS;
+
+Fail:
+    if (Buffer) RtlFreeHeap(RtlGetProcessHeap(), 0, Buffer);
+    RtlFreeHeap(RtlGetProcessHeap(), 0, TlsData);
+    return Status;
 }
 
 VOID
@@ -1431,6 +1606,7 @@ LdrpFreeTls(VOID)
     }
 
     /* Free the array itself */
+    Teb->ThreadLocalStoragePointer = NULL;
     RtlFreeHeap(RtlGetProcessHeap(),
                 0,
                 TlsVector);
