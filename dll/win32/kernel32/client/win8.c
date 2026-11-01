@@ -362,3 +362,111 @@ CompareObjectHandles(IN HANDLE hFirstObjectHandle,
     Result = (First == Second);
     return Result;
 }
+
+/* CYCLE TIME *****************************************************************/
+
+/*
+ * The kernel keeps no per-process cycle counters, so cycle times are derived from the
+ * accumulated kernel+user time and the CPU frequency the boot loader recorded.
+ */
+static ULONG64 BasepCyclesPer100ns;
+
+static ULONG64
+BasepGetCyclesPer100ns(VOID)
+{
+    ULONG64 Cached = BasepCyclesPer100ns;
+    RTL_QUERY_REGISTRY_TABLE Table[2];
+    ULONG Mhz = 0;
+
+    if (Cached) return Cached;
+
+    RtlZeroMemory(Table, sizeof(Table));
+    Table[0].Flags = RTL_QUERY_REGISTRY_DIRECT | RTL_QUERY_REGISTRY_REQUIRED;
+    Table[0].Name = L"~MHz";
+    Table[0].EntryContext = &Mhz;
+    if (!NT_SUCCESS(RtlQueryRegistryValues(RTL_REGISTRY_ABSOLUTE,
+                                           L"\\Registry\\Machine\\HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0",
+                                           Table, NULL, NULL)) || !Mhz)
+    {
+        Mhz = 2000;
+    }
+
+    /* MHz = cycles per microsecond; one 100ns tick is a tenth of that */
+    Cached = (ULONG64)Mhz / 10;
+    if (!Cached) Cached = 1;
+    BasepCyclesPer100ns = Cached;
+    return Cached;
+}
+
+static ULONG64
+BasepFileTimeSum(const FILETIME *Kernel, const FILETIME *User)
+{
+    ULARGE_INTEGER k, u;
+    k.LowPart = Kernel->dwLowDateTime; k.HighPart = Kernel->dwHighDateTime;
+    u.LowPart = User->dwLowDateTime; u.HighPart = User->dwHighDateTime;
+    return k.QuadPart + u.QuadPart;
+}
+
+BOOL
+WINAPI
+QueryProcessCycleTime(
+    _In_ HANDLE ProcessHandle,
+    _Out_ PULONG64 CycleTime)
+{
+    FILETIME Create, Exit, Kernel, User;
+
+    if (!CycleTime)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    if (!GetProcessTimes(ProcessHandle, &Create, &Exit, &Kernel, &User)) return FALSE;
+    *CycleTime = BasepFileTimeSum(&Kernel, &User) * BasepGetCyclesPer100ns();
+    return TRUE;
+}
+
+BOOL
+WINAPI
+QueryThreadCycleTime(
+    _In_ HANDLE ThreadHandle,
+    _Out_ PULONG64 CycleTime)
+{
+    FILETIME Create, Exit, Kernel, User;
+
+    if (!CycleTime)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    if (!GetThreadTimes(ThreadHandle, &Create, &Exit, &Kernel, &User)) return FALSE;
+    *CycleTime = BasepFileTimeSum(&Kernel, &User) * BasepGetCyclesPer100ns();
+    return TRUE;
+}
+
+/* WOW64 ******************************************************/
+
+BOOL
+WINAPI
+IsWow64Process2(
+    _In_ HANDLE hProcess,
+    _Out_ USHORT *pProcessMachine,
+    _Out_opt_ USHORT *pNativeMachine)
+{
+    BOOL Wow64 = FALSE;
+
+    if (!pProcessMachine)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    if (!IsWow64Process(hProcess, &Wow64)) return FALSE;
+
+#ifdef _M_AMD64
+    *pProcessMachine = IMAGE_FILE_MACHINE_UNKNOWN;
+    if (pNativeMachine) *pNativeMachine = IMAGE_FILE_MACHINE_AMD64;
+#else
+    *pProcessMachine = IMAGE_FILE_MACHINE_UNKNOWN;
+    if (pNativeMachine) *pNativeMachine = IMAGE_FILE_MACHINE_I386;
+#endif
+    return TRUE;
+}
