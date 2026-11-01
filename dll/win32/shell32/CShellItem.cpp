@@ -637,4 +637,20 @@ SHGetPropertyStoreFromParsingName(
     return hr;
 }
 
+/***********************************************************************
+ *   SHGetPropertyStoreForWindow [SHELL32.@]
+ */
+EXTERN_C HRESULT WINAPI
+SHGetPropertyStoreForWindow(
+    _In_ HWND hwnd,
+    _In_ REFIID riid,
+    _Out_ void **ppv)
+{
+    FIXME("(%p,%s,%p) stub\n", hwnd, debugstr_guid(&riid), ppv);
+    if (!ppv)
+        return E_POINTER;
+    *ppv = NULL;
+    return E_NOTIMPL;
+}
+
 #endif /* DLL_EXPORT_VERSION >= _WIN32_WINNT_VISTA */
