@@ -2345,6 +2345,8 @@ MmInitSectionImplementation(VOID)
     ObjectTypeInitializer.DefaultPagedPoolCharge = sizeof(SECTION);
     ObjectTypeInitializer.PoolType = PagedPool;
     ObjectTypeInitializer.UseDefaultObject = TRUE;
+    /* Unnamed sections must carry a security descriptor too, so DACLs (e.g. read-only sections) are enforced */
+    ObjectTypeInitializer.SecurityRequired = TRUE;
     ObjectTypeInitializer.GenericMapping = MmpSectionMapping;
     ObjectTypeInitializer.DeleteProcedure = MmpDeleteSection;
     ObjectTypeInitializer.CloseProcedure = MmpCloseSection;

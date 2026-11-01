@@ -310,6 +310,44 @@ GetTimeZoneInformation(LPTIME_ZONE_INFORMATION lpTimeZoneInformation)
 
 /*
  * @implemented
+ *
+ * There is no per-key dynamic DST data yet; the key name is taken from the standard name,
+ * which matches the registry key names (e.g. "Pacific Standard Time") on en-US systems.
+ */
+DWORD
+WINAPI
+GetDynamicTimeZoneInformation(PDYNAMIC_TIME_ZONE_INFORMATION lpTimeZoneInformation)
+{
+    TIME_ZONE_INFORMATION Tzi;
+    DWORD Ret;
+
+    if (!lpTimeZoneInformation)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return TIME_ZONE_ID_INVALID;
+    }
+
+    Ret = GetTimeZoneInformation(&Tzi);
+    if (Ret == TIME_ZONE_ID_INVALID)
+        return Ret;
+
+    RtlZeroMemory(lpTimeZoneInformation, sizeof(*lpTimeZoneInformation));
+    lpTimeZoneInformation->Bias = Tzi.Bias;
+    RtlCopyMemory(lpTimeZoneInformation->StandardName, Tzi.StandardName, sizeof(Tzi.StandardName));
+    lpTimeZoneInformation->StandardDate = Tzi.StandardDate;
+    lpTimeZoneInformation->StandardBias = Tzi.StandardBias;
+    RtlCopyMemory(lpTimeZoneInformation->DaylightName, Tzi.DaylightName, sizeof(Tzi.DaylightName));
+    lpTimeZoneInformation->DaylightDate = Tzi.DaylightDate;
+    lpTimeZoneInformation->DaylightBias = Tzi.DaylightBias;
+    wcsncpy(lpTimeZoneInformation->TimeZoneKeyName, Tzi.StandardName,
+            ARRAYSIZE(lpTimeZoneInformation->TimeZoneKeyName) - 1);
+    lpTimeZoneInformation->DynamicDaylightTimeDisabled = FALSE;
+    return Ret;
+}
+
+
+/*
+ * @implemented
  */
 BOOL
 WINAPI
