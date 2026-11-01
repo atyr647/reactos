@@ -7,7 +7,7 @@
 @ stub DllGetActivationFactory
 @ stub -private DllGetClassObject
 @ stdcall GetCurrentProcessExplicitAppUserModelID(ptr)
-@ stdcall -stub GetDpiForMonitor(long long ptr ptr)
+@ stdcall GetDpiForMonitor(ptr long ptr ptr)
 @ stub GetDpiForShellUIComponent
 @ stdcall GetFeatureEnabledState(long long)
 # @ stub GetFeatureVariant
@@ -90,7 +90,7 @@
 @ stdcall SHUnicodeToAnsi(wstr ptr ptr)
 @ stdcall SHUnicodeToUnicode(wstr ptr long)
 @ stdcall SetCurrentProcessExplicitAppUserModelID(wstr)
-@ stdcall -stub SetProcessDpiAwareness(long)
+@ stdcall SetProcessDpiAwareness(long)
 @ stdcall SetProcessReference(ptr)
 @ stdcall SubscribeFeatureStateChangeNotification(ptr ptr ptr)
 @ stub UnregisterScaleChangeEvent
