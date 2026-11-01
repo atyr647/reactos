@@ -483,6 +483,39 @@ ObpChargeQuotaForObject(IN POBJECT_HEADER ObjectHeader,
     return STATUS_SUCCESS;
 }
 
+/*
+ * Vista+ semantics: a SACL that only carries mandatory integrity labels does not need
+ * SeSecurityPrivilege, only audit/alarm ACEs do. Applications (e.g. Steam) put a low
+ * integrity label on the shared memory they create.
+ */
+static
+BOOLEAN
+ObpSaclNeedsSystemSecurity(IN PSECURITY_DESCRIPTOR SecurityDescriptor)
+{
+    BOOLEAN SaclPresent, SaclDefaulted;
+    PACL Sacl;
+    PACE_HEADER Ace;
+    ULONG i;
+
+    if (!NT_SUCCESS(RtlGetSaclSecurityDescriptor(SecurityDescriptor,
+                                                 &SaclPresent,
+                                                 &Sacl,
+                                                 &SaclDefaulted)))
+    {
+        return TRUE;
+    }
+
+    if (!SaclPresent || !Sacl) return FALSE;
+
+    for (i = 0; i < Sacl->AceCount; i++)
+    {
+        if (!NT_SUCCESS(RtlGetAce(Sacl, i, (PVOID*)&Ace))) return TRUE;
+        if (Ace->AceType != 0x11 /* SYSTEM_MANDATORY_LABEL_ACE_TYPE */) return TRUE;
+    }
+
+    return FALSE;
+}
+
 NTSTATUS
 NTAPI
 ObpValidateAccessMask(IN PACCESS_STATE AccessState)
@@ -495,7 +528,8 @@ ObpValidateAccessMask(IN PACCESS_STATE AccessState)
     {
         /* Check if the SD has a system ACL but hasn't been granted access to get/set it */
         if ((SecurityDescriptor->Control & SE_SACL_PRESENT) &&
-            !(AccessState->PreviouslyGrantedAccess & ACCESS_SYSTEM_SECURITY))
+            !(AccessState->PreviouslyGrantedAccess & ACCESS_SYSTEM_SECURITY) &&
+            ObpSaclNeedsSystemSecurity(SecurityDescriptor))
         {
             /* We're gonna need access */
             AccessState->RemainingDesiredAccess |= ACCESS_SYSTEM_SECURITY;
