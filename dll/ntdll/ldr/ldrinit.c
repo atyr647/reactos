@@ -1274,6 +1274,47 @@ LdrShutdownThread(VOID)
     return STATUS_SUCCESS;
 }
 
+/*
+ * The image states the alignment its TLS data needs in bits 20-23 of
+ * IMAGE_TLS_DIRECTORY.Characteristics (value n means 1 << (n - 1) bytes).
+ * Chromium, for example, has alignas(64) thread-local objects. A heap block is
+ * only 8 byte aligned, so allocate extra, align the block, and keep the raw heap
+ * pointer in the pointer-sized slot just before it so it can be freed.
+ */
+static
+ULONG
+LdrpTlsAlignmentFromCharacteristics(IN ULONG Characteristics)
+{
+    ULONG Field = (Characteristics >> 20) & 0xF;
+    ULONG Alignment = Field ? (1UL << (Field - 1)) : 0;
+
+    /* Never less than 16: SSE data in TLS is common */
+    return (Alignment < 16) ? 16 : Alignment;
+}
+
+static
+PVOID
+LdrpAllocateTlsBlock(IN PLDRP_TLS_DATA TlsData,
+                     IN SIZE_T Size)
+{
+    ULONG Alignment = TlsData->TlsAlignment ? TlsData->TlsAlignment : 16;
+    PUCHAR Raw, Block;
+
+    Raw = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY, Size + Alignment + sizeof(PVOID));
+    if (!Raw) return NULL;
+
+    Block = (PUCHAR)(((ULONG_PTR)(Raw + sizeof(PVOID)) + (Alignment - 1)) & ~((ULONG_PTR)Alignment - 1));
+    ((PVOID *)Block)[-1] = Raw;
+    return Block;
+}
+
+static
+VOID
+LdrpFreeTlsBlock(IN PVOID Block)
+{
+    if (Block) RtlFreeHeap(RtlGetProcessHeap(), 0, ((PVOID *)Block)[-1]);
+}
+
 NTSTATUS
 NTAPI
 LdrpInitializeTls(VOID)
@@ -1326,6 +1367,7 @@ LdrpInitializeTls(VOID)
 
         /* Save the cached TLS data */
         TlsData->TlsDirectory = *TlsDirectory;
+        TlsData->TlsAlignment = LdrpTlsAlignmentFromCharacteristics(TlsDirectory->Characteristics);
         InsertTailList(&LdrpTlsList, &TlsData->TlsLinks);
 
         /* Update the index */
@@ -1371,10 +1413,9 @@ LdrpAllocateTls(VOID)
         TlsDataSize = TlsData->TlsDirectory.EndAddressOfRawData -
                       TlsData->TlsDirectory.StartAddressOfRawData;
         /* The block also holds SizeOfZeroFill zero bytes after the initialized data */
-        TlsVector[TlsData->TlsDirectory.Characteristics] = RtlAllocateHeap(RtlGetProcessHeap(),
-                                                                           HEAP_ZERO_MEMORY,
-                                                                           TlsDataSize +
-                                                                           TlsData->TlsDirectory.SizeOfZeroFill);
+        TlsVector[TlsData->TlsDirectory.Characteristics] = LdrpAllocateTlsBlock(TlsData,
+                                                                                TlsDataSize +
+                                                                                TlsData->TlsDirectory.SizeOfZeroFill);
         if (!TlsVector[TlsData->TlsDirectory.Characteristics])
         {
             /* Out of memory */
@@ -1420,12 +1461,11 @@ LdrpTlsAddToTeb(IN PTEB Teb,
               TlsData->TlsDirectory.StartAddressOfRawData;
 
     New = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY, (Index + 1) * sizeof(PVOID));
-    Block = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY,
-                            RawSize + TlsData->TlsDirectory.SizeOfZeroFill + sizeof(PVOID));
+    Block = LdrpAllocateTlsBlock(TlsData, RawSize + TlsData->TlsDirectory.SizeOfZeroFill);
     if (!New || !Block)
     {
         if (New) RtlFreeHeap(RtlGetProcessHeap(), 0, New);
-        if (Block) RtlFreeHeap(RtlGetProcessHeap(), 0, Block);
+        LdrpFreeTlsBlock(Block);
         return STATUS_NO_MEMORY;
     }
 
@@ -1478,6 +1518,7 @@ LdrpHandleTlsData(IN PLDR_DATA_TABLE_ENTRY LdrEntry)
     TlsData = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*TlsData));
     if (!TlsData) return STATUS_NO_MEMORY;
     TlsData->TlsDirectory = *TlsDirectory;
+    TlsData->TlsAlignment = LdrpTlsAlignmentFromCharacteristics(TlsDirectory->Characteristics);
     Index = LdrpNumberOfTlsEntries;
     TlsData->TlsDirectory.Characteristics = Index;
 
@@ -1597,12 +1638,7 @@ LdrpFreeTls(VOID)
         NextEntry = NextEntry->Flink;
 
         /* Free each entry */
-        if (TlsVector[TlsData->TlsDirectory.Characteristics])
-        {
-            RtlFreeHeap(RtlGetProcessHeap(),
-                        0,
-                        TlsVector[TlsData->TlsDirectory.Characteristics]);
-        }
+        LdrpFreeTlsBlock(TlsVector[TlsData->TlsDirectory.Characteristics]);
     }
 
     /* Free the array itself */

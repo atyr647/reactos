@@ -27,6 +27,7 @@ typedef struct _LDRP_TLS_DATA
 {
     LIST_ENTRY TlsLinks;
     IMAGE_TLS_DIRECTORY TlsDirectory;
+    ULONG TlsAlignment; /* required alignment of each thread's block, in bytes */
 } LDRP_TLS_DATA, *PLDRP_TLS_DATA;
 
 typedef
