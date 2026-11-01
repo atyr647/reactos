@@ -139,3 +139,58 @@ DeleteProcThreadAttributeList(IN OUT PVOID lpAttributeList)
 {
     /* Nothing is allocated by the list itself */
 }
+
+#define K32_ATTRIBUTE_HANDLE_LIST 2
+
+/*
+ * Handles named in a PROC_THREAD_ATTRIBUTE_HANDLE_LIST are inherited by the
+ * child whether or not they carry HANDLE_FLAG_INHERIT (Chromium's crash
+ * reporter passes a pipe that is not marked inheritable this way).
+ * Mark them inheritable for the duration of the CreateProcess call.
+ * Handles that were changed are returned in Marked so they can be restored.
+ *
+ * Not implemented: the list is not exclusive, other inheritable handles are
+ * still inherited too.
+ */
+ULONG
+BasepMarkHandleListInheritable(IN PVOID AttributeList,
+                               OUT HANDLE *Marked,
+                               IN ULONG MaxMarked)
+{
+    K32_PROC_THREAD_ATTRIBUTE_LIST *List = AttributeList;
+    ULONG Marks = 0, i, k;
+
+    for (i = 0; i < List->Count; i++)
+    {
+        HANDLE *Handles;
+        ULONG Count;
+
+        if ((List->Attrs[i].Attribute & K32_ATTRIBUTE_NUMBER_MASK) != K32_ATTRIBUTE_HANDLE_LIST) continue;
+
+        Handles = List->Attrs[i].Value;
+        Count = (ULONG)(List->Attrs[i].Size / sizeof(HANDLE));
+        for (k = 0; k < Count && Marks < MaxMarked; k++)
+        {
+            DWORD Flags;
+
+            if (!GetHandleInformation(Handles[k], &Flags) || (Flags & HANDLE_FLAG_INHERIT)) continue;
+            if (SetHandleInformation(Handles[k], HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT))
+                Marked[Marks++] = Handles[k];
+        }
+    }
+
+    return Marks;
+}
+
+VOID
+BasepRestoreHandleList(IN HANDLE *Marked,
+                       IN ULONG Count)
+{
+    ULONG i;
+    DWORD LastError = GetLastError();
+
+    for (i = 0; i < Count; i++)
+        SetHandleInformation(Marked[i], HANDLE_FLAG_INHERIT, 0);
+
+    SetLastError(LastError);
+}
