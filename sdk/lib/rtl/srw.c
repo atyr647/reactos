@@ -194,10 +194,39 @@ RtlpReleaseWaitBlockLock(IN OUT PRTL_SRWLOCK SRWLock)
 }
 
 
+/*
+ * SRW locks here are implemented as pure spin waits. A waiter that spins forever can starve
+ * the thread that owns the lock (always on a single CPU, or when the owner has a lower
+ * priority), so after a short spin give up the CPU, and eventually sleep for a moment.
+ */
+static VOID
+RtlpSrwBackoff(IN OUT PULONG SpinCount)
+{
+    ULONG Count = (*SpinCount)++;
+
+    if (Count < 64)
+    {
+        YieldProcessor();
+    }
+    else if (Count < 192)
+    {
+        NtYieldExecution();
+    }
+    else
+    {
+        LARGE_INTEGER Interval;
+
+        Interval.QuadPart = -10000; /* 1 ms */
+        NtDelayExecution(FALSE, &Interval);
+    }
+}
+
+
 static PRTLP_SRWLOCK_WAITBLOCK
 NTAPI
 RtlpAcquireWaitBlockLock(IN OUT PRTL_SRWLOCK SRWLock)
 {
+    ULONG SpinCount = 0;
     LONG_PTR PrevValue;
     PRTLP_SRWLOCK_WAITBLOCK WaitBlock;
 
@@ -209,7 +238,7 @@ RtlpAcquireWaitBlockLock(IN OUT PRTL_SRWLOCK SRWLock)
         if (!(PrevValue & RTL_SRWLOCK_CONTENTION_LOCK))
             break;
 
-        YieldProcessor();
+        RtlpSrwBackoff(&SpinCount);
     }
 
     if (!(PrevValue & RTL_SRWLOCK_CONTENDED) ||
@@ -232,6 +261,7 @@ NTAPI
 RtlpAcquireSRWLockExclusiveWait(IN OUT PRTL_SRWLOCK SRWLock,
                                 IN PRTLP_SRWLOCK_WAITBLOCK WaitBlock)
 {
+    ULONG SpinCount = 0;
     LONG_PTR CurrentValue;
 
     while (1)
@@ -257,7 +287,7 @@ RtlpAcquireSRWLockExclusiveWait(IN OUT PRTL_SRWLOCK SRWLock,
             }
         }
 
-        YieldProcessor();
+        RtlpSrwBackoff(&SpinCount);
     }
 }
 
@@ -268,11 +298,12 @@ RtlpAcquireSRWLockSharedWait(IN OUT PRTL_SRWLOCK SRWLock,
                              IN OUT PRTLP_SRWLOCK_WAITBLOCK FirstWait  OPTIONAL,
                              IN OUT PRTLP_SRWLOCK_SHARED_WAKE WakeChain)
 {
+    ULONG SpinCount = 0;
     if (FirstWait != NULL)
     {
         while (WakeChain->Wake == 0)
         {
-            YieldProcessor();
+            RtlpSrwBackoff(&SpinCount);
         }
     }
     else
@@ -306,7 +337,7 @@ RtlpAcquireSRWLockSharedWait(IN OUT PRTL_SRWLOCK SRWLock,
                 }
             }
 
-            YieldProcessor();
+            RtlpSrwBackoff(&SpinCount);
         }
     }
 }
@@ -324,6 +355,7 @@ VOID
 NTAPI
 RtlAcquireSRWLockShared(IN OUT PRTL_SRWLOCK SRWLock)
 {
+    ULONG SpinCount = 0;
     __ALIGNED(16) RTLP_SRWLOCK_WAITBLOCK StackWaitBlock;
     RTLP_SRWLOCK_SHARED_WAKE SharedWake;
     LONG_PTR CurrentValue, NewValue;
@@ -516,7 +548,7 @@ RtlAcquireSRWLockShared(IN OUT PRTL_SRWLOCK SRWLock)
             }
         }
 
-        YieldProcessor();
+        RtlpSrwBackoff(&SpinCount);
     }
 }
 
@@ -525,6 +557,7 @@ VOID
 NTAPI
 RtlReleaseSRWLockShared(IN OUT PRTL_SRWLOCK SRWLock)
 {
+    ULONG SpinCount = 0;
     LONG_PTR CurrentValue, NewValue;
     PRTLP_SRWLOCK_WAITBLOCK WaitBlock;
     BOOLEAN LastShared;
@@ -581,7 +614,7 @@ RtlReleaseSRWLockShared(IN OUT PRTL_SRWLOCK SRWLock)
             RtlRaiseStatus(STATUS_RESOURCE_NOT_OWNED);
         }
 
-        YieldProcessor();
+        RtlpSrwBackoff(&SpinCount);
     }
 }
 
@@ -590,6 +623,7 @@ VOID
 NTAPI
 RtlAcquireSRWLockExclusive(IN OUT PRTL_SRWLOCK SRWLock)
 {
+    ULONG SpinCount = 0;
     __ALIGNED(16) RTLP_SRWLOCK_WAITBLOCK StackWaitBlock;
     PRTLP_SRWLOCK_WAITBLOCK First, Last;
 
@@ -699,7 +733,7 @@ AddWaitBlock:
                 }
             }
 
-            YieldProcessor();
+            RtlpSrwBackoff(&SpinCount);
         }
     }
 }
@@ -709,6 +743,7 @@ VOID
 NTAPI
 RtlReleaseSRWLockExclusive(IN OUT PRTL_SRWLOCK SRWLock)
 {
+    ULONG SpinCount = 0;
     LONG_PTR CurrentValue, NewValue;
     PRTLP_SRWLOCK_WAITBLOCK WaitBlock;
 
@@ -762,7 +797,7 @@ RtlReleaseSRWLockExclusive(IN OUT PRTL_SRWLOCK SRWLock)
             RtlRaiseStatus(STATUS_RESOURCE_NOT_OWNED);
         }
 
-        YieldProcessor();
+        RtlpSrwBackoff(&SpinCount);
     }
 }
 
