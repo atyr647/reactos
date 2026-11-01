@@ -1025,8 +1025,12 @@ LdrpApisetVersion(VOID)
             case 0:
                 break;
             case _WIN32_WINNT_VISTA:
-                /* No apisets in vista yet*/
-                CachedApisetVersion = 0;
+                /* Vista itself has no apisets. But a manifest that lists several
+                   Windows versions is mapped to the lowest one (Vista), even when
+                   the program was built for Windows 7 and imports the Windows 7
+                   contract names, so resolve those. */
+                CachedApisetVersion = APISET_WIN7;
+                DPRINT1("Activating apisets for Win7 (process claims Vista)\n");
                 break;
             case _WIN32_WINNT_WIN7:
                 CachedApisetVersion = APISET_WIN7;
