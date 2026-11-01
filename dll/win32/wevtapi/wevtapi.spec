@@ -1,0 +1,8 @@
+@ stdcall EvtClose(ptr)
+@ stdcall EvtCreateRenderContext(long ptr long)
+@ stdcall EvtNext(ptr long ptr long long ptr)
+@ stdcall EvtOpenChannelEnum(ptr long)
+@ stdcall EvtOpenPublisherEnum(ptr long)
+@ stdcall EvtQuery(ptr wstr wstr long)
+@ stdcall EvtRender(ptr ptr long long ptr ptr ptr)
+@ stdcall EvtSubscribe(ptr ptr wstr wstr ptr ptr ptr long)
