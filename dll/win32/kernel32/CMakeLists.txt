@@ -44,6 +44,7 @@ list(APPEND SOURCE
     client/sysinfoansi.c
     client/time.c
     client/timerqueue.c
+    client/win8.c
     client/toolhelp.c
     client/utils.c
     client/thread.c
