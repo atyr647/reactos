@@ -1025,16 +1025,15 @@ LdrpApisetVersion(VOID)
             case 0:
                 break;
             case _WIN32_WINNT_VISTA:
-                /* Vista itself has no apisets. But a manifest that lists several
-                   Windows versions is mapped to the lowest one (Vista), even when
-                   the program was built for Windows 7 and imports the Windows 7
-                   contract names, so resolve those. */
-                CachedApisetVersion = APISET_WIN7;
-                DPRINT1("Activating apisets for Win7 (process claims Vista)\n");
-                break;
             case _WIN32_WINNT_WIN7:
-                CachedApisetVersion = APISET_WIN7;
-                DPRINT1("Activating apisets for Win7\n");
+                /* Vista itself has no apisets, but a manifest that lists several
+                   Windows versions is mapped to the lowest one (Vista) even when the
+                   program was built for Windows 7. Programs built for Windows 7 also
+                   routinely import newer contract revisions that platform updates
+                   provide (for example api-ms-win-core-libraryloader-l1-2-0), so for
+                   these processes accept the contracts of every version in the table. */
+                CachedApisetVersion = APISET_WIN7 | APISET_WIN8 | APISET_WIN81 | APISET_WIN10;
+                DPRINT1("Activating apisets for Win7 and newer contracts\n");
                 break;
             case _WIN32_WINNT_WIN8:
                 CachedApisetVersion = APISET_WIN8;
