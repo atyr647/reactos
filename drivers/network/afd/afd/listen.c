@@ -146,14 +146,18 @@ static NTSTATUS SatisfySuperAccept(PAFD_FCB FCB, PIRP Irp, PAFD_TDI_OBJECT_QELT 
         goto end;
 
     /* Write the local address */
-    LONG LocalAddressLength = min(AcceptInfo->LocalAddressLength, Buffer->Address.Address->AddressLength);
+    /* TA_ADDRESS::AddressLength does not count the AddressType field, which is copied
+       as the sockaddr family, so the sockaddr is AddressLength + sizeof(USHORT) long. */
+    LONG LocalAddressLength = min(AcceptInfo->LocalAddressLength - sizeof(USHORT),
+                                  Buffer->Address.Address->AddressLength + sizeof(USHORT));
     BufferPtr += AcceptInfo->ReceiveDataLength;
     RtlCopyMemory(BufferPtr, &Buffer->Address.Address->AddressType, LocalAddressLength);
     *(USHORT *)(BufferPtr + AcceptInfo->LocalAddressLength - sizeof(USHORT)) = LocalAddressLength;
     ExFreePool(Buffer);
 
     /* Write the remote address*/
-    LONG RemoteAddressLength = min(AcceptInfo->RemoteAddressLength, RemoteAddress->Address[0].AddressLength);
+    LONG RemoteAddressLength = min(AcceptInfo->RemoteAddressLength - sizeof(USHORT),
+                                  RemoteAddress->Address[0].AddressLength + sizeof(USHORT));
     BufferPtr += AcceptInfo->LocalAddressLength;
     RtlCopyMemory(BufferPtr, &RemoteAddress->Address[0].AddressType, RemoteAddressLength);
 
