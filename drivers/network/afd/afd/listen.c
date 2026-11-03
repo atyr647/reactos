@@ -106,6 +106,7 @@ static NTSTATUS SatisfySuperAccept(PAFD_FCB FCB, PIRP Irp, PAFD_TDI_OBJECT_QELT 
     Irp->Tail.Overlay.DriverContext[2] = NULL;
 
     BYTE *BufferPtr = MmGetSystemAddressForMdlSafe((PMDL)Irp->Tail.Overlay.DriverContext[3], NormalPagePriority);
+    BYTE *ReceiveBuffer = BufferPtr; /* the received data goes first, before the addresses */
     if (!BufferPtr)
         goto end;
 
@@ -170,7 +171,7 @@ static NTSTATUS SatisfySuperAccept(PAFD_FCB FCB, PIRP Irp, PAFD_TDI_OBJECT_QELT 
 
         Status = TdiReceive(&FCB2->ReceiveIrp.InFlightRequest,
                             FCB2->Connection.Object, TDI_RECEIVE_NORMAL,
-                            (PCHAR)BufferPtr,
+                            (PCHAR)ReceiveBuffer,
                             AcceptInfo->ReceiveDataLength,
                             AcceptExReceiveComplete,
                             FCB2);
