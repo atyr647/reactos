@@ -906,7 +906,7 @@ DriverEntry(
     /* Setup network layer and transport layer entities */
     KeInitializeSpinLock(&EntityListLock);
     EntityList = ExAllocatePoolWithTag(NonPagedPool,
-                                       sizeof(TDIEntityID) * MAX_TDI_ENTITIES,
+                                       sizeof(TDIEntityInfo) * MAX_TDI_ENTITIES,
                                        TDI_ENTITY_TAG );
     if (!EntityList) {
         TI_DbgPrint(MIN_TRACE, ("Insufficient resources.\n"));
