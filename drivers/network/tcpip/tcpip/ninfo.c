@@ -208,15 +208,12 @@ TDI_STATUS InfoTdiQueryGetConnectionTcpTable(PADDRESS_FILE AddrFile,
 
     if (AddrFile->Listener != NULL)
     {
-        PADDRESS_FILE EndPoint;
-
-        EndPoint = AddrFile->Listener->AddressFile;
-
         TcpRow.dwState = MIB_TCP_STATE_LISTEN;
         TcpRow.dwLocalAddr = AddrFile->Address.Address.IPv4Address;
         TcpRow.dwLocalPort = AddrFile->Port;
-        TcpRow.dwRemoteAddr = EndPoint->Address.Address.IPv4Address;
-        TcpRow.dwRemotePort = EndPoint->Port;
+        /* A listening socket has no remote endpoint */
+        TcpRow.dwRemoteAddr = 0;
+        TcpRow.dwRemotePort = 0;
 
         Status = TDI_SUCCESS;
     }
@@ -231,7 +228,7 @@ TDI_STATUS InfoTdiQueryGetConnectionTcpTable(PADDRESS_FILE AddrFile,
             ASSERT(EndPoint.TAAddressCount >= 1);
             ASSERT(EndPoint.Address[0].AddressLength == TDI_ADDRESS_LENGTH_IP);
             TcpRow.dwLocalAddr = EndPoint.Address[0].Address[0].in_addr;
-            TcpRow.dwLocalPort = ntohs(EndPoint.Address[0].Address[0].sin_port);
+            TcpRow.dwLocalPort = EndPoint.Address[0].Address[0].sin_port;
 
             Status = TCPGetSockAddress(AddrFile->Connection, (PTRANSPORT_ADDRESS)&EndPoint, TRUE);
             if (NT_SUCCESS(Status))
@@ -239,7 +236,7 @@ TDI_STATUS InfoTdiQueryGetConnectionTcpTable(PADDRESS_FILE AddrFile,
                 ASSERT(EndPoint.TAAddressCount >= 1);
                 ASSERT(EndPoint.Address[0].AddressLength == TDI_ADDRESS_LENGTH_IP);
                 TcpRow.dwRemoteAddr = EndPoint.Address[0].Address[0].in_addr;
-                TcpRow.dwRemotePort = ntohs(EndPoint.Address[0].Address[0].sin_port);
+                TcpRow.dwRemotePort = EndPoint.Address[0].Address[0].sin_port;
 
                 Status = TCPGetSocketStatus(AddrFile->Connection, &TcpRow.dwState);
                 ASSERT(NT_SUCCESS(Status));
