@@ -34,4 +34,5 @@ NTSTATUS LkpiRunInit(_In_ PLKPI_MODULE Module, _Out_ int *InitResult);
 VOID LkpiRunExit(_In_ PLKPI_MODULE Module);
 VOID LkpiFreeModule(_In_ PLKPI_MODULE Module);
 
+void * LX_ABI LkpiMissing(const char *Name);
 int LX_ABI lx_printk(const char *Fmt, lx_ulong a1, lx_ulong a2, lx_ulong a3, lx_ulong a4, lx_ulong a5);

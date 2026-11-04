@@ -1,0 +1,4 @@
+# Out-of-tree Linux module: the LinuxKPI core. Build with build.sh (see ../README.md).
+obj-m += kpi.o
+kpi-y := kpi_core.o $(patsubst %.c,%.o,$(notdir $(KLIB_SRCS)))
+ccflags-y := -I$(srctree)/lib -Wno-unused-function -Wno-error

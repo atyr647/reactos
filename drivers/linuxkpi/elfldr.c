@@ -38,6 +38,7 @@ typedef struct { ULONG64 r_offset, r_info; LONG64 r_addend; } ELF64_RELA;
 
 /* One 16-byte entry per symbol: [0..7] = GOT slot (symbol address), [8..13] = jmp *slot(%rip) (a PLT stub) */
 #define STUB_SIZE 16
+#define TRAP_SIZE 32   /* per symbol: mov rdi,name; mov rax,LkpiMissing; jmp rax */
 
 struct _LKPI_MODULE
 {
@@ -179,7 +180,7 @@ LkpiLoadModule(PCUNICODE_STRING Path, PLKPI_MODULE *Out)
             Total += (SIZE_T)Syms[i].st_size;
         }
     Total = ALIGN_UP_BY(Total, 64);
-    M->RegionSize = Total + (SIZE_T)M->NumSyms * STUB_SIZE;
+    M->RegionSize = Total + (SIZE_T)M->NumSyms * (STUB_SIZE + TRAP_SIZE);
     M->Region = ExAllocatePoolWithTag(NonPagedPool, M->RegionSize, LKPI_TAG);
     if (!M->Region) { Status = STATUS_NO_MEMORY; goto fail; }
     RtlZeroMemory(M->Region, M->RegionSize);
@@ -207,7 +208,17 @@ LkpiLoadModule(PCUNICODE_STRING Path, PLKPI_MODULE *Out)
         if (S->st_shndx == SHN_UNDEF)
         {
             PVOID A = !strcmp(Name, "_GLOBAL_OFFSET_TABLE_") ? (PVOID)M->Stubs : LkpiFindExport(Name);
-            if (!A && (S->st_info >> 4) != STB_WEAK && Name[0]) { DbgPrint("LKPI: unresolved symbol '%s'\n", Name); MissingSyms++; }
+            if (!A && (S->st_info >> 4) != STB_WEAK && Name[0])
+            {
+                /* bind to a stub that reports the call, so the module can still load and we see what is missing */
+                PUCHAR T = M->Stubs + (SIZE_T)M->NumSyms * STUB_SIZE + (SIZE_T)i * TRAP_SIZE;
+                T[0] = 0x48; T[1] = 0xBF; *(ULONG64 *)(T + 2) = (ULONG64)(ULONG_PTR)Name;
+                T[10] = 0x48; T[11] = 0xB8; *(ULONG64 *)(T + 12) = (ULONG64)(ULONG_PTR)LkpiMissing;
+                T[20] = 0xFF; T[21] = 0xE0;
+                A = T;
+                MissingSyms++;
+                DbgPrint("LKPI: unresolved symbol '%s' (trapped)\n", Name);
+            }
             M->SymAddr[i] = (ULONG64)(ULONG_PTR)A;
         }
         else if (S->st_shndx == SHN_ABS)
@@ -232,7 +243,7 @@ LkpiLoadModule(PCUNICODE_STRING Path, PLKPI_MODULE *Out)
             *(LONG *)(E + 10) = (LONG)(-14);   /* jmp *slot(%rip): slot = E, next insn at E+14 */
         }
     }
-    if (MissingSyms) { DbgPrint("LKPI: %lu unresolved symbols, refusing to load\n", MissingSyms); Status = STATUS_DRIVER_ENTRYPOINT_NOT_FOUND; goto fail; }
+    if (MissingSyms) DbgPrint("LKPI: %lu unresolved symbols bound to traps\n", MissingSyms);
 
     for (i = 0; i < Eh->e_shnum; i++)
     {

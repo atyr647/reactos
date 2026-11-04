@@ -33,3 +33,16 @@ Relocation types seen: PC32, PLT32, GOTPCREL(X), REX_GOTPCRELX, 64, 32 (all supp
 ## Testing
 `cmake -DLKPI_TEST_MODULE=/path/test.ko .`  puts the module on the CD as `lkpitest.ko`;
 `sc start linuxkpi` loads it. Output goes to the kernel debug port (prefix `LKPI:` / `LINUX:`).
+
+## Status
+* `kpi/` builds `kpi.ko` against the Linux headers (`kpi/build.sh <linux tree>`): real Linux vsprintf/bitmap/rbtree/
+  idr/xarray/sort/... from `lib/` plus `kpi_core.c` (spinlocks, rwlocks, mutex, completions, wait queues, kmalloc/
+  slab, jiffies/delays, printk). It talks to NT only through the `nt_*` bridge in `shim.c`.
+* The kernel config for this must be `CONFIG_SMP=n CONFIG_PREEMPT_NONE=y CONFIG_DEBUG_SPINLOCK=y CONFIG_TINY_RCU=y
+  CONFIG_JUMP_LABEL=n` (UP per-cpu data, out-of-line spinlocks) in addition to the source tweaks above.
+* Unresolved symbols no longer stop a module from loading: they are bound to a trap that logs
+  `call to unimplemented Linux function '<name>'`, which gives the work list while running.
+* Verified in QEMU (x64 UEFI): kpi.ko loads and initializes, a second module loads against it.
+* DRM core + TTM + bochs still need 269 more functions (see `drm_need.txt` workflow in the notes): memory
+  (`alloc_pages`, struct page / vmemmap), device model (`devres`, class, kobject), vfs/seq_file/debugfs,
+  workqueues, kthreads, timers, PCI, RCU, dma-buf, fences.

@@ -79,48 +79,95 @@ lx_printk(const char *Fmt, lx_ulong a1, lx_ulong a2, lx_ulong a3, lx_ulong a4, l
     return n;
 }
 
-/* ---- memory ---------------------------------------------------------------------- */
+/* ---- bridge for the Linux-compiled core module (kpi.ko) ----------------------------------- */
 
-static void * LX_ABI lx_kmalloc(lx_ulong Size, u32 Flags)
+void * LX_ABI nt_alloc(lx_ulong Size, int Zero)
 {
-    return ExAllocatePoolWithTag(NonPagedPool, (SIZE_T)Size, LKPI_TAG);
-}
-
-static void * LX_ABI lx_kzalloc(lx_ulong Size, u32 Flags)
-{
-    void *p = ExAllocatePoolWithTag(NonPagedPool, (SIZE_T)Size, LKPI_TAG);
-    if (p) RtlZeroMemory(p, (SIZE_T)Size);
+    PVOID p = ExAllocatePoolWithTag(NonPagedPool, Size ? (SIZE_T)Size : 1, LKPI_TAG);
+    if (p && Zero) RtlZeroMemory(p, (SIZE_T)Size);
     return p;
 }
 
-static void LX_ABI lx_kfree(const void *p)
+void LX_ABI nt_free(void *p) { if (p) ExFreePoolWithTag(p, LKPI_TAG); }
+
+unsigned char LX_ABI nt_raise_dispatch(void)
 {
-    if (p) ExFreePoolWithTag((PVOID)p, LKPI_TAG);
+    KIRQL Old = KeGetCurrentIrql();
+    if (Old < DISPATCH_LEVEL) KeRaiseIrql(DISPATCH_LEVEL, &Old);
+    return (unsigned char)Old;
 }
 
-static void * LX_ABI lx_memset(void *d, int c, lx_ulong n) { RtlFillMemory(d, (SIZE_T)n, (UCHAR)c); return d; }
-static void * LX_ABI lx_memcpy(void *d, const void *s, lx_ulong n) { RtlCopyMemory(d, s, (SIZE_T)n); return d; }
-static void * LX_ABI lx_memmove(void *d, const void *s, lx_ulong n) { RtlMoveMemory(d, s, (SIZE_T)n); return d; }
-static int LX_ABI lx_memcmp(const void *a, const void *b, lx_ulong n) { return memcmp(a, b, (SIZE_T)n); }
-static lx_ulong LX_ABI lx_strlen(const char *s) { return strlen(s); }
-static int LX_ABI lx_strcmp(const char *a, const char *b) { return strcmp(a, b); }
+void LX_ABI nt_lower_irql(unsigned char Old)
+{
+    if (KeGetCurrentIrql() > (KIRQL)Old) KeLowerIrql((KIRQL)Old);
+}
+
+void LX_ABI nt_sleep_ms(unsigned int Ms)
+{
+    LARGE_INTEGER Interval;
+
+    if (KeGetCurrentIrql() >= DISPATCH_LEVEL)
+    {
+        KeStallExecutionProcessor(Ms ? Ms * 1000 : 10);
+        return;
+    }
+    Interval.QuadPart = Ms ? -(LONGLONG)Ms * 10000 : -1000;   /* 0 = ~100 us */
+    KeDelayExecutionThread(KernelMode, FALSE, &Interval);
+}
+
+void LX_ABI nt_stall_us(unsigned int Us) { KeStallExecutionProcessor(Us); }
+
+unsigned long long LX_ABI nt_time_ms(void)
+{
+    LARGE_INTEGER Now;
+    KeQueryTickCount(&Now);
+    return (unsigned long long)Now.QuadPart * KeQueryTimeIncrement() / 10000;
+}
+
+void LX_ABI nt_dbgprint(const char *s) { DbgPrint("LINUX: %s", s); }
+
+static void (LX_ABI *LkpiTickFn)(void);
+static KTIMER LkpiTickTimer;
+static KDPC LkpiTickDpc;
+
+static VOID NTAPI LkpiTickDpcRoutine(PKDPC Dpc, PVOID Ctx, PVOID Arg1, PVOID Arg2)
+{
+    if (LkpiTickFn) LkpiTickFn();
+}
+
+void LX_ABI nt_register_tick(void (LX_ABI *Fn)(void))
+{
+    LARGE_INTEGER Due;
+
+    LkpiTickFn = Fn;
+    KeInitializeTimerEx(&LkpiTickTimer, SynchronizationTimer);
+    KeInitializeDpc(&LkpiTickDpc, LkpiTickDpcRoutine, NULL);
+    Due.QuadPart = -10000;   /* 1 ms */
+    KeSetTimerEx(&LkpiTickTimer, Due, 1, &LkpiTickDpc);
+}
+
+/* ---- called when a module calls a Linux function that is not implemented yet ---------------- */
+void * LX_ABI LkpiMissing(const char *Name)
+{
+    DbgPrint("LKPI: call to unimplemented Linux function '%s'\n", Name);
+    return NULL;
+}
 
 /* ---- export table ----------------------------------------------------------------- */
 
 const LKPI_EXPORT LkpiExports[] =
 {
+    { "nt_alloc", (PVOID)nt_alloc },
+    { "nt_free", (PVOID)nt_free },
+    { "nt_raise_dispatch", (PVOID)nt_raise_dispatch },
+    { "nt_lower_irql", (PVOID)nt_lower_irql },
+    { "nt_sleep_ms", (PVOID)nt_sleep_ms },
+    { "nt_stall_us", (PVOID)nt_stall_us },
+    { "nt_time_ms", (PVOID)nt_time_ms },
+    { "nt_dbgprint", (PVOID)nt_dbgprint },
+    { "nt_register_tick", (PVOID)nt_register_tick },
     { "_printk", (PVOID)lx_printk },
     { "printk", (PVOID)lx_printk },
-    { "__kmalloc_noprof", (PVOID)lx_kmalloc },
-    { "kmalloc", (PVOID)lx_kmalloc },
-    { "kzalloc", (PVOID)lx_kzalloc },
-    { "kfree", (PVOID)lx_kfree },
-    { "memset", (PVOID)lx_memset },
-    { "memcpy", (PVOID)lx_memcpy },
-    { "memmove", (PVOID)lx_memmove },
-    { "memcmp", (PVOID)lx_memcmp },
-    { "strlen", (PVOID)lx_strlen },
-    { "strcmp", (PVOID)lx_strcmp },
 };
 
 const ULONG LkpiExportCount = RTL_NUMBER_OF(LkpiExports);

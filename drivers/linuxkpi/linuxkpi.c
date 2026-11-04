@@ -4,17 +4,24 @@
  */
 
 #include "linuxkpi.h"
+#include <ntstrsafe.h>
 
-static PLKPI_MODULE LkpiTestModule;
+#ifndef LKPI_MODULE_COUNT
+#define LKPI_MODULE_COUNT 0
+#endif
+#define LKPI_MAX_MODULES 16
+
+static PLKPI_MODULE LkpiModules[LKPI_MAX_MODULES];
+static ULONG LkpiModuleCount;
 
 static VOID
 LkpiUnload(PDRIVER_OBJECT DriverObject)
 {
-    if (LkpiTestModule)
+    while (LkpiModuleCount)
     {
-        LkpiRunExit(LkpiTestModule);
-        LkpiFreeModule(LkpiTestModule);
-        LkpiTestModule = NULL;
+        PLKPI_MODULE M = LkpiModules[--LkpiModuleCount];
+        LkpiRunExit(M);
+        LkpiFreeModule(M);
     }
     DbgPrint("LKPI: unloaded\n");
 }
@@ -22,21 +29,31 @@ LkpiUnload(PDRIVER_OBJECT DriverObject)
 NTSTATUS NTAPI
 DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
 {
-    UNICODE_STRING Path = RTL_CONSTANT_STRING(L"\\SystemRoot\\system32\\drivers\\lkpitest.ko");
-    NTSTATUS Status;
-    int InitResult = -1;
+    ULONG i;
 
-    DbgPrint("LKPI: Linux kernel module host starting\n");
+    DbgPrint("LKPI: Linux kernel module host starting (%u modules)\n", (ULONG)LKPI_MODULE_COUNT);
     DriverObject->DriverUnload = LkpiUnload;
 
-    Status = LkpiLoadModule(&Path, &LkpiTestModule);
-    if (!NT_SUCCESS(Status))
+    for (i = 0; i < LKPI_MODULE_COUNT && i < LKPI_MAX_MODULES; i++)
     {
-        DbgPrint("LKPI: no test module loaded (%08lx)\n", Status);
-        return STATUS_SUCCESS;  /* the host stays loaded */
-    }
+        WCHAR PathBuf[96];
+        UNICODE_STRING Path;
+        PLKPI_MODULE M;
+        NTSTATUS Status;
+        int InitResult = -1;
 
-    Status = LkpiRunInit(LkpiTestModule, &InitResult);
-    DbgPrint("LKPI: init_module returned %d (status %08lx)\n", InitResult, Status);
+        RtlStringCbPrintfW(PathBuf, sizeof(PathBuf), L"\\SystemRoot\\system32\\drivers\\lkpimod%u.ko", i);
+        RtlInitUnicodeString(&Path, PathBuf);
+        Status = LkpiLoadModule(&Path, &M);
+        if (!NT_SUCCESS(Status))
+        {
+            DbgPrint("LKPI: module %u failed to load (%08lx)\n", i, Status);
+            break;
+        }
+        LkpiModules[LkpiModuleCount++] = M;
+        Status = LkpiRunInit(M, &InitResult);
+        DbgPrint("LKPI: module %u init_module returned %d (status %08lx)\n", i, InitResult, Status);
+        if (InitResult != 0) break;
+    }
     return STATUS_SUCCESS;
 }
