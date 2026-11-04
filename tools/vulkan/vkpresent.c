@@ -15,6 +15,17 @@ static void L(const char *fmt, ...)
 #define W 400
 #define H 300
 
+static LONG WINAPI Uef(PEXCEPTION_POINTERS p)
+{
+    HMODULE m = NULL; char name[260] = "?";
+    GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, p->ExceptionRecord->ExceptionAddress, &m);
+    if (m) GetModuleFileNameA(m, name, sizeof name);
+    L("VKPRES: CRASH %08lx at %p (%s +%llx) info %llx %llx", p->ExceptionRecord->ExceptionCode, p->ExceptionRecord->ExceptionAddress, name,
+      (unsigned long long)((char *)p->ExceptionRecord->ExceptionAddress - (char *)m), (unsigned long long)p->ExceptionRecord->ExceptionInformation[0],
+      (unsigned long long)p->ExceptionRecord->ExceptionInformation[1]);
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+
 static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
     if (m == WM_DESTROY) { PostQuitMessage(0); return 0; }
@@ -40,9 +51,26 @@ int main(int argc, char **argv)
     int frame, frames = argc > 1 ? atoi(argv[1]) : 120;
     MSG msg;
 
-    SetEnvironmentVariableA("VK_LOADER_NO_DXGI", "1");
+    SetEnvironmentVariableA("VK_LOADER_NO_DXGI", "1"); _putenv("VK_LOADER_NO_DXGI=1");
     if (!getenv("VK_DRIVER_FILES")) SetEnvironmentVariableA("VK_DRIVER_FILES", "C:\\lvp_icd.x86_64.json");
+    SetUnhandledExceptionFilter(Uef);
     L("VKPRES: start, vulkan-1=%p", vk);
+    {
+        uint32_t cnt = 0;
+        PFN_vkEnumerateInstanceLayerProperties el = (PFN_vkEnumerateInstanceLayerProperties)gipa(0, "vkEnumerateInstanceLayerProperties");
+        PFN_vkEnumerateInstanceExtensionProperties ee = (PFN_vkEnumerateInstanceExtensionProperties)gipa(0, "vkEnumerateInstanceExtensionProperties");
+        CK(el(&cnt, 0)); L("VKPRES: %u layers", cnt);
+        CK(ee(0, &cnt, 0)); L("VKPRES: %u instance extensions", cnt);
+        if (getenv("ALLEXT")) {
+            static VkExtensionProperties ep[64]; static const char *names[64]; uint32_t i;
+            if (cnt > 64) cnt = 64;
+            CK(ee(0, &cnt, ep));
+            for (i = 0; i < cnt; i++) { names[i] = ep[i].extensionName; L("VKPRES: ext %s", names[i]); }
+            ici.enabledExtensionCount = cnt; ici.ppEnabledExtensionNames = names;
+            app.apiVersion = VK_API_VERSION_1_0;
+            ici.flags = VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+        }
+    }
     CK(((PFN_vkCreateInstance)gipa(0, "vkCreateInstance"))(&ici, 0, &inst));
 #define IP(name) PFN_##name name = (PFN_##name)gipa(inst, #name)
     IP(vkEnumeratePhysicalDevices); IP(vkCreateWin32SurfaceKHR); IP(vkGetPhysicalDeviceSurfaceSupportKHR);

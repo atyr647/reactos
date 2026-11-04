@@ -28,7 +28,7 @@ fi
 cmake -S headers -B headers-build -G Ninja -DCMAKE_INSTALL_PREFIX=$PWD/headers-install >/dev/null && cmake --install headers-build >/dev/null
 cmake -S loader -B loader-build -G Ninja -DCMAKE_TOOLCHAIN_FILE=$TG -DCMAKE_BUILD_TYPE=Release \
   -DVULKAN_HEADERS_INSTALL_DIR=$PWD/headers-install -DUSE_MASM=OFF -DUSE_GAS=ON -DBUILD_TESTS=OFF
-(cd loader && git apply $HERE/loader-no-dxgi.patch 2>/dev/null || true)
+(cd loader && git apply $HERE/loader-win64.patch 2>/dev/null || true)
 ninja -C loader-build
 x86_64-w64-mingw32-strip -o out/vulkan-1.dll loader-build/loader/vulkan-1.dll
 

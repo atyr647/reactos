@@ -7,7 +7,8 @@ spec2def(gdi32_vista.dll gdi32_vista.spec ADD_IMPORTLIB)
 
 list(APPEND SOURCE
     dc.c
-    d3dkmt.c)
+    d3dkmt.c
+    d3dkmt_share.c)
 
 add_library(gdi32_vista MODULE
     ${SOURCE}

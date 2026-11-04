@@ -31,8 +31,8 @@ def imports(p):
 tot=0
 for p in sys.argv[2:]:
     for dll,syms in sorted(imports(p).items()):
-        ex=exports(dll)
+        ex=exports('ucrtbase.dll' if dll.lower().startswith('api-ms-win-crt-') else dll)
         if ex is None: print(f"{os.path.basename(p)}: {dll}: NOT BUILT/UNKNOWN ({len(syms)} symbols)"); continue
-        miss=sorted(s for s in syms if s not in ex and s!='' and s!='<none>' and not (len(s)>=8 and all(c in '0123456789abcdef' for c in s)))
+        miss=sorted(s for s in syms if s not in ex and s!='' and s!='<none>' and not (len(s)>=2 and all(c in '0123456789abcdef' for c in s)))
         if miss: print(f"{os.path.basename(p)}: {dll}: missing {len(miss)}: {' '.join(miss)}"); tot+=len(miss)
 print("total missing:",tot)

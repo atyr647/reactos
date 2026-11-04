@@ -12,7 +12,7 @@ export (use it on every new DLL before booting).
 
 `vkpresent.c` creates a Win32 window, a `VK_KHR_win32_surface` swapchain and clears/presents 200 frames (lavapipe
 renders into the window through GDI): all steps return VK_SUCCESS and the window shows the animated clear colour.
-`loader-no-dxgi.patch` lets the loader skip `dxgi.dll` (`VK_LOADER_NO_DXGI=1`): ReactOS's wined3d otherwise shows a
+`loader-win64.patch` lets the loader skip `dxgi.dll` (`VK_LOADER_NO_DXGI=1`): ReactOS's wined3d otherwise shows a
 blocking "needs OpenGL 2.0" box.
 
 ## What had to change in ReactOS
@@ -22,13 +22,22 @@ blocking "needs OpenGL 2.0" box.
 * The Vista+ exports are gated on `DLL_EXPORT_VERSION` (default `0x502`). Binaries built for Windows 10 import
   `api-ms-win-core-*` sets that resolve to kernel32, so they need `-DDLL_EXPORT_VERSION=0xA00` (full rebuild).
 
-## Known problems (ReactOS side, not yet fixed)
-* `vkcube.exe` and `vulkaninfo.exe` (Vulkan-Tools 1.4.309) die silently: tracing shows vkcube stops inside its
-  `vkCreateInstance` call; no unhandled-exception-filter, `atexit` or `exit()` runs. Our own `vkpresent` creates the
-  same instance (all 15 extensions, API 1.0, portability flag) and runs fine, so the cause is still open.
-* A process that calls `AddVectoredExceptionHandler` in `main` died silently before the next statement
-  (`vkunload.c` first version); replacing it with `SetUnhandledExceptionFilter` worked. Needs a proper repro/fix.
-* Load/Free/Load of `vulkan_lvp.dll` (Mesa + static LLVM) is fine (`vkunload.c`).
+## DXVK (D3D11) on lavapipe on ReactOS
+`d3d11test.c` loads DXVK 3.1.1's `d3d11.dll`/`dxgi.dll` (release build, mingw + UCRT) from the exe directory, creates a
+hardware device (feature level 11.0) + swapchain, compiles HLSL with ReactOS's `d3dcompiler_47`, and draws a shaded
+triangle every frame. DXVK finds `llvmpipe (LLVM 18.1.3)` through the Vulkan loader. DXVK needed 9 more gdi32 D3DKMT
+entry points (shared resources / keyed mutex); they are stubs returning STATUS_NOT_SUPPORTED
+(`win32ss/gdi/gdi32_vista/d3dkmt_share.c`).
+
+## Pitfalls found while bringing this up (all fixed in the patch / tests)
+* The loader's GAS trampolines for unknown device/physical-device extension functions assumed the System V x64 ABI
+  (`rdi`); on Windows x64 the first argument is `rcx`. DXVK calls such functions, so it crashed in the loader.
+  `loader-win64.patch` adds the Win64 variant.
+* The loader calls `CreateDXGIFactory1` unconditionally; the opt-out patch (`VK_LOADER_NO_DXGI=1`) now installs a stub
+  instead of a NULL pointer (a NULL call looked like a silent process death for a long time).
+* `SetEnvironmentVariable` does not update the C runtime's `environ`; tests also call `_putenv`.
+* `OutputDebugString` raises an exception that vectored handlers see; a handler that logs with `OutputDebugString`
+  recurses until the stack is gone. (An earlier note blaming `AddVectoredExceptionHandler` was wrong.)
 
 ## Next gates
 vkcube (win32 WSI), DXVK D3D11 sample, vkd3d-proton D3D12 sample, then radv on amdgpu (LinuxKPI).

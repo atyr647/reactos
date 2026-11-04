@@ -340,3 +340,4 @@ D3DKMTQueryVideoMemoryInfo(_Inout_ D3DKMT_QUERYVIDEOMEMORYINFO* unnamedParam1)
 
     return STATUS_PROCEDURE_NOT_FOUND;
 }
+
