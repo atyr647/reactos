@@ -1,0 +1,14 @@
+diff --git a/loader/loader_windows.c b/loader/loader_windows.c
+index f73659c..c4cfb01 100644
+--- a/loader/loader_windows.c
++++ b/loader/loader_windows.c
+@@ -84,7 +84,8 @@ void windows_initialization(void) {
+     wchar_t systemPath[MAX_PATH] = L"";
+     GetSystemDirectoryW(systemPath, MAX_PATH);
+     StringCchCatW(systemPath, MAX_PATH, L"\\dxgi.dll");
+-    HMODULE dxgi_module = LoadLibraryW(systemPath);
++    /* ReactOS: its dxgi/wined3d pops up a blocking "needs OpenGL 2.0" box; allow opting out of DXGI. */
++    HMODULE dxgi_module = getenv("VK_LOADER_NO_DXGI") ? NULL : LoadLibraryW(systemPath);
+     fpCreateDXGIFactory1 =
+         dxgi_module == NULL ? NULL : (PFN_CreateDXGIFactory1)(void *)GetProcAddress(dxgi_module, "CreateDXGIFactory1");
+ 

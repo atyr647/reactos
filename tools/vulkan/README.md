@@ -10,6 +10,11 @@ export (use it on every new DLL before booting).
     VKTEST: device 'llvmpipe (LLVM 18.1.3, 128 bits)' api 1.4.354 driver 6802006 type 4
     VKTEST: vkCreateDevice -> 0 ; vkQueueWaitIdle -> 0 ; PASS
 
+`vkpresent.c` creates a Win32 window, a `VK_KHR_win32_surface` swapchain and clears/presents 200 frames (lavapipe
+renders into the window through GDI): all steps return VK_SUCCESS and the window shows the animated clear colour.
+`loader-no-dxgi.patch` lets the loader skip `dxgi.dll` (`VK_LOADER_NO_DXGI=1`): ReactOS's wined3d otherwise shows a
+blocking "needs OpenGL 2.0" box.
+
 ## What had to change in ReactOS
 * `RtlWaitOnAddress` / `RtlWakeAddress*` were stubs returning STATUS_NOT_IMPLEMENTED; now a real keyed-event
   implementation (`sdk/lib/rtl/waitaddress.c`). Mesa's futex layer uses `WaitOnAddress`, so `WaitOnAddress` /

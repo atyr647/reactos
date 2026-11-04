@@ -28,6 +28,7 @@ fi
 cmake -S headers -B headers-build -G Ninja -DCMAKE_INSTALL_PREFIX=$PWD/headers-install >/dev/null && cmake --install headers-build >/dev/null
 cmake -S loader -B loader-build -G Ninja -DCMAKE_TOOLCHAIN_FILE=$TG -DCMAKE_BUILD_TYPE=Release \
   -DVULKAN_HEADERS_INSTALL_DIR=$PWD/headers-install -DUSE_MASM=OFF -DUSE_GAS=ON -DBUILD_TESTS=OFF
+(cd loader && git apply $HERE/loader-no-dxgi.patch 2>/dev/null || true)
 ninja -C loader-build
 x86_64-w64-mingw32-strip -o out/vulkan-1.dll loader-build/loader/vulkan-1.dll
 
@@ -41,6 +42,6 @@ ninja -C mesa-build
 L=mesa-build/src/gallium/targets/lavapipe
 x86_64-w64-mingw32-strip -o out/vulkan_lvp.dll $L/vulkan_lvp.dll
 sed 's|[^"]*vulkan_lvp.dll|vulkan_lvp.dll|' $L/lvp_icd.x86_64.json > out/lvp_icd.x86_64.json
-x86_64-w64-mingw32-gcc -O2 -I headers-install/include $HERE/vktest.c -o out/vktest.exe -static-libgcc
+for t in vktest vkpresent; do x86_64-w64-mingw32-gcc -O2 -I headers-install/include $HERE/$t.c -o out/$t.exe -static-libgcc; done
 echo "done: $WORK/out"
 echo "check imports against a ReactOS build:  $HERE/rosimp.py <reactos-build-dir> out/*.dll"
