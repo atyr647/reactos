@@ -722,6 +722,9 @@
 @ stdcall -version=0x600+ InitOnceBeginInitialize(ptr long ptr ptr)
 @ stdcall -version=0x600+ InitOnceComplete(ptr long ptr)
 @ stdcall -version=0x600+ InitOnceExecuteOnce(ptr ptr ptr ptr)
+@ stdcall -version=0x600+ WaitOnAddress(ptr ptr long long)
+@ stdcall -version=0x600+ WakeByAddressAll(ptr) ntdll.RtlWakeAddressAll
+@ stdcall -version=0x600+ WakeByAddressSingle(ptr) ntdll.RtlWakeAddressSingle
 @ stdcall -version=0x600+ InitOnceInitialize(ptr) ntdll.RtlRunOnceInitialize
 @ stdcall -version=0x600+ InitializeConditionVariable(ptr) ntdll.RtlInitializeConditionVariable
 @ stdcall InitializeCriticalSection(ptr)

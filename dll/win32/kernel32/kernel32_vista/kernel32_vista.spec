@@ -20,6 +20,10 @@
 @ stdcall WakeAllConditionVariable(ptr)
 @ stdcall WakeConditionVariable(ptr)
 
+@ stdcall WaitOnAddress(ptr ptr long long)
+@ stdcall WakeByAddressAll(ptr) ntdll_vista.RtlWakeAddressAll
+@ stdcall WakeByAddressSingle(ptr) ntdll_vista.RtlWakeAddressSingle
+
 @ stdcall InitializeCriticalSectionEx(ptr long long)
 
 @ stdcall GetFirmwareEnvironmentVariableExA(str str ptr long long)
