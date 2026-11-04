@@ -589,6 +589,7 @@
 @ stdcall -arch=arm KeFlushIoBuffers(ptr long long)
 @ stdcall KeFlushQueuedDpcs()
 @ stdcall KeGenericCallDpc(ptr ptr)
+@ stdcall -arch=x86_64 KeGetCurrentIrql() KxGetCurrentIrql
 @ stdcall KeGetCurrentThread()
 @ stdcall KeGetPreviousMode()
 @ stdcall KeGetRecommendedSharedDataAlignment()
@@ -614,6 +615,7 @@
 @ stdcall KeInitializeQueue(ptr long)
 @ stdcall KeInitializeSemaphore(ptr long long)
 @ stdcall -arch=i386,arm KeInitializeSpinLock(ptr) _KeInitializeSpinLock
+@ stdcall -arch=x86_64 KeInitializeSpinLock(ptr) KxInitializeSpinLock
 @ stdcall KeInitializeThreadedDpc(ptr ptr ptr)
 @ stdcall KeInitializeTimer(ptr)
 @ stdcall KeInitializeTimerEx(ptr long)
