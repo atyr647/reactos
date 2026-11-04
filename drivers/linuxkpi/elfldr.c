@@ -51,15 +51,34 @@ struct _LKPI_MODULE
     ULONG NumSyms;
     PVOID InitFn, ExitFn;
     BOOLEAN Initialized;
+    ELF64_SYM *Syms;
+    const char *StrTab;
+    struct _LKPI_MODULE *Next;
 };
+
+static PLKPI_MODULE LkpiLoaded;   /* most recently loaded first */
 
 static PVOID
 LkpiFindExport(const char *Name)
 {
     ULONG i;
+    PLKPI_MODULE M;
+
     for (i = 0; i < LkpiExportCount; i++)
         if (!strcmp(LkpiExports[i].Name, Name))
             return LkpiExports[i].Address;
+
+    /* global symbols of modules that are already loaded (EXPORT_SYMBOL, in effect) */
+    for (M = LkpiLoaded; M; M = M->Next)
+    {
+        ULONG k;
+        for (k = 1; k < M->NumSyms; k++)
+        {
+            ELF64_SYM *S = &M->Syms[k];
+            if (S->st_shndx != SHN_UNDEF && (S->st_info >> 4) >= 1 && S->st_name && !strcmp(M->StrTab + S->st_name, Name))
+                return (PVOID)(ULONG_PTR)M->SymAddr[k];
+        }
+    }
     return NULL;
 }
 
@@ -93,6 +112,11 @@ VOID
 LkpiFreeModule(PLKPI_MODULE M)
 {
     if (!M) return;
+    {
+        PLKPI_MODULE *pp;
+        for (pp = &LkpiLoaded; *pp; pp = &(*pp)->Next)
+            if (*pp == M) { *pp = M->Next; break; }
+    }
     if (M->Image) ExFreePoolWithTag(M->Image, LKPI_TAG);
     if (M->Region) ExFreePoolWithTag(M->Region, LKPI_TAG);
     if (M->SecBase) ExFreePoolWithTag(M->SecBase, LKPI_TAG);
@@ -136,8 +160,10 @@ LkpiLoadModule(PCUNICODE_STRING Path, PLKPI_MODULE *Out)
         if (Sh[i].sh_type == SHT_SYMTAB) SymSh = &Sh[i];
     if (!SymSh) FAIL("no symbol table");
     Syms = (ELF64_SYM *)(M->Image + SymSh->sh_offset);
+    M->Syms = Syms;
     M->NumSyms = (ULONG)(SymSh->sh_size / sizeof(ELF64_SYM));
     StrTab = (const char *)(M->Image + Sh[SymSh->sh_link].sh_offset);
+    M->StrTab = StrTab;
 
     /* Layout: [alloc sections][common symbols][stubs] */
     for (i = 0; i < Eh->e_shnum; i++)
@@ -267,6 +293,8 @@ LkpiLoadModule(PCUNICODE_STRING Path, PLKPI_MODULE *Out)
     }
 
     DbgPrint("LKPI: loaded module: %lu bytes in memory at %p, init=%p exit=%p\n", (ULONG)M->RegionSize, M->Region, M->InitFn, M->ExitFn);
+    M->Next = LkpiLoaded;
+    LkpiLoaded = M;
     *Out = M;
     return STATUS_SUCCESS;
 
