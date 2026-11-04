@@ -11,6 +11,12 @@
 #include "afd.h"
 
 
+
+/* Overlapped sends always complete asynchronously with the full byte count, even on a
+ * non-blocking socket; only plain non-blocking sends may be short. */
+#define AfdSendIsBlocking(FCB, SendReq) \
+    (((SendReq)->AfdFlags & AFD_OVERLAPPED) || !(((SendReq)->AfdFlags & AFD_IMMEDIATE) || (FCB)->NonBlocking))
+
 #define AFD_MAX_SEND_GROW (8 * 1024 * 1024)
 
 /* Windows completes an overlapped/blocking stream send only once every byte has been
@@ -205,7 +211,7 @@ static NTSTATUS NTAPI SendComplete
             SendLength += SendReq->BufferArray[i].len;
         }
 
-        if (!((SendReq->AfdFlags & AFD_IMMEDIATE) || FCB->NonBlocking))
+        if (AfdSendIsBlocking(FCB, SendReq))
             AfdGrowSendWindow(FCB, SendLength);
 
         SpaceAvail = FCB->Send.Size - FCB->Send.BytesUsed;
@@ -214,7 +220,7 @@ static NTSTATUS NTAPI SendComplete
         if (SendLength > SpaceAvail)
         {
            /* Blocking sockets have to wait here */
-           if (AfdSendWillFitLater(FCB, SendLength) && !((SendReq->AfdFlags & AFD_IMMEDIATE) || (FCB->NonBlocking)))
+           if (AfdSendWillFitLater(FCB, SendLength) && AfdSendIsBlocking(FCB, SendReq))
            {
                FCB->PollState &= ~AFD_EVENT_SEND;
 
@@ -506,7 +512,7 @@ AfdConnectedSocketWriteData(PDEVICE_OBJECT DeviceObject, PIRP Irp,
         SendLength += SendReq->BufferArray[i].len;
     }
 
-    if (!((SendReq->AfdFlags & AFD_IMMEDIATE) || (FCB->NonBlocking)))
+    if (AfdSendIsBlocking(FCB, SendReq))
         AfdGrowSendWindow(FCB, SendLength);
 
     SpaceAvail = FCB->Send.Size - FCB->Send.BytesUsed;
@@ -518,7 +524,7 @@ AfdConnectedSocketWriteData(PDEVICE_OBJECT DeviceObject, PIRP Irp,
     if (SendLength > SpaceAvail)
     {
         /* Blocking sockets have to wait here */
-        if (AfdSendWillFitLater(FCB, SendLength) && !((SendReq->AfdFlags & AFD_IMMEDIATE) || (FCB->NonBlocking)))
+        if (AfdSendWillFitLater(FCB, SendLength) && AfdSendIsBlocking(FCB, SendReq))
         {
             FCB->PollState &= ~AFD_EVENT_SEND;
             return LeaveIrpUntilLater(FCB, Irp, FUNCTION_SEND);
