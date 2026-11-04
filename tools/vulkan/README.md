@@ -22,5 +22,13 @@ blocking "needs OpenGL 2.0" box.
 * The Vista+ exports are gated on `DLL_EXPORT_VERSION` (default `0x502`). Binaries built for Windows 10 import
   `api-ms-win-core-*` sets that resolve to kernel32, so they need `-DDLL_EXPORT_VERSION=0xA00` (full rebuild).
 
+## Known problems (ReactOS side, not yet fixed)
+* `vkcube.exe` and `vulkaninfo.exe` (Vulkan-Tools 1.4.309) die silently: tracing shows vkcube stops inside its
+  `vkCreateInstance` call; no unhandled-exception-filter, `atexit` or `exit()` runs. Our own `vkpresent` creates the
+  same instance (all 15 extensions, API 1.0, portability flag) and runs fine, so the cause is still open.
+* A process that calls `AddVectoredExceptionHandler` in `main` died silently before the next statement
+  (`vkunload.c` first version); replacing it with `SetUnhandledExceptionFilter` worked. Needs a proper repro/fix.
+* Load/Free/Load of `vulkan_lvp.dll` (Mesa + static LLVM) is fine (`vkunload.c`).
+
 ## Next gates
 vkcube (win32 WSI), DXVK D3D11 sample, vkd3d-proton D3D12 sample, then radv on amdgpu (LinuxKPI).
