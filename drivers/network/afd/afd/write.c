@@ -10,6 +10,37 @@
 
 #include "afd.h"
 
+
+#define AFD_MAX_SEND_GROW (8 * 1024 * 1024)
+
+/* Windows completes an overlapped/blocking stream send only once every byte has been
+ * accepted. AFD's send window is fixed, so a send bigger than the window used to be
+ * completed with a short byte count, which callers (e.g. Steam's web server using
+ * overlapped WSASend with IOCP) do not expect: the rest of the message was silently
+ * dropped and the stream desynchronized. Grow the (idle) window instead so the whole
+ * request fits and the normal "wait until it fits" logic applies. */
+static BOOLEAN AfdGrowSendWindow(PAFD_FCB FCB, ULONG Needed)
+{
+    PCHAR NewWindow;
+
+    if (Needed <= FCB->Send.Size) return TRUE;
+    if (Needed > AFD_MAX_SEND_GROW) return FALSE;
+    if (FCB->Send.BytesUsed != 0 || FCB->SendIrp.InFlightRequest) return FALSE;
+
+    NewWindow = ExAllocatePoolWithTag(PagedPool, Needed, TAG_AFD_DATA_BUFFER);
+    if (!NewWindow) return FALSE;
+
+    if (FCB->Send.Window) ExFreePoolWithTag(FCB->Send.Window, TAG_AFD_DATA_BUFFER);
+    FCB->Send.Window = NewWindow;
+    FCB->Send.Size = Needed;
+    return TRUE;
+}
+
+static BOOLEAN AfdSendWillFitLater(PAFD_FCB FCB, ULONG SendLength)
+{
+    return SendLength <= max(FCB->Send.Size, (ULONG)AFD_MAX_SEND_GROW);
+}
+
 static IO_COMPLETION_ROUTINE SendComplete;
 static NTSTATUS NTAPI SendComplete
 ( PDEVICE_OBJECT DeviceObject,
@@ -165,7 +196,6 @@ static NTSTATUS NTAPI SendComplete
 
         AFD_DbgPrint(MID_TRACE,("SendReq @ %p\n", SendReq));
 
-        SpaceAvail = FCB->Send.Size - FCB->Send.BytesUsed;
         TotalBytesCopied = 0;
 
         /* Count the total transfer size */
@@ -175,11 +205,16 @@ static NTSTATUS NTAPI SendComplete
             SendLength += SendReq->BufferArray[i].len;
         }
 
+        if (!((SendReq->AfdFlags & AFD_IMMEDIATE) || FCB->NonBlocking))
+            AfdGrowSendWindow(FCB, SendLength);
+
+        SpaceAvail = FCB->Send.Size - FCB->Send.BytesUsed;
+
         /* Make sure we've got the space */
         if (SendLength > SpaceAvail)
         {
            /* Blocking sockets have to wait here */
-           if (SendLength <= FCB->Send.Size && !((SendReq->AfdFlags & AFD_IMMEDIATE) || (FCB->NonBlocking)))
+           if (AfdSendWillFitLater(FCB, SendLength) && !((SendReq->AfdFlags & AFD_IMMEDIATE) || (FCB->NonBlocking)))
            {
                FCB->PollState &= ~AFD_EVENT_SEND;
 
@@ -464,11 +499,6 @@ AfdConnectedSocketWriteData(PDEVICE_OBJECT DeviceObject, PIRP Irp,
     AFD_DbgPrint(MID_TRACE,("FCB->Send.BytesUsed = %u\n",
                             FCB->Send.BytesUsed));
 
-    SpaceAvail = FCB->Send.Size - FCB->Send.BytesUsed;
-
-    AFD_DbgPrint(MID_TRACE,("We can accept %u bytes\n",
-                            SpaceAvail));
-
     /* Count the total transfer size */
     SendLength = 0;
     for (i = 0; i < SendReq->BufferCount; i++)
@@ -476,11 +506,19 @@ AfdConnectedSocketWriteData(PDEVICE_OBJECT DeviceObject, PIRP Irp,
         SendLength += SendReq->BufferArray[i].len;
     }
 
+    if (!((SendReq->AfdFlags & AFD_IMMEDIATE) || (FCB->NonBlocking)))
+        AfdGrowSendWindow(FCB, SendLength);
+
+    SpaceAvail = FCB->Send.Size - FCB->Send.BytesUsed;
+
+    AFD_DbgPrint(MID_TRACE,("We can accept %u bytes\n",
+                            SpaceAvail));
+
     /* Make sure we've got the space */
     if (SendLength > SpaceAvail)
     {
         /* Blocking sockets have to wait here */
-        if (SendLength <= FCB->Send.Size && !((SendReq->AfdFlags & AFD_IMMEDIATE) || (FCB->NonBlocking)))
+        if (AfdSendWillFitLater(FCB, SendLength) && !((SendReq->AfdFlags & AFD_IMMEDIATE) || (FCB->NonBlocking)))
         {
             FCB->PollState &= ~AFD_EVENT_SEND;
             return LeaveIrpUntilLater(FCB, Irp, FUNCTION_SEND);
