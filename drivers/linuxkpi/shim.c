@@ -321,6 +321,111 @@ int LX_ABI nt_pci_cfg_write(unsigned int Bus, unsigned int DevFn, unsigned int O
     return Got == Len ? 0 : -1;
 }
 
+
+/* ---- interrupts (legacy line through the HAL) and firmware files ----------------------------------- */
+
+typedef struct _LKPI_IRQ
+{
+    PKINTERRUPT Obj;
+    int Irq;
+    void *Dev;
+    int (LX_ABI *Handler)(int, void *);
+    int (LX_ABI *Thread)(int, void *);
+    KDPC Dpc;
+    BOOLEAN ThreadPending;
+} LKPI_IRQ;
+
+static VOID NTAPI LkpiIrqDpc(PKDPC Dpc, PVOID Ctx, PVOID A1, PVOID A2)
+{
+    LKPI_IRQ *Q = Ctx;
+    if (InterlockedExchange8((volatile CHAR *)&Q->ThreadPending, 0) && Q->Thread) Q->Thread(Q->Irq, Q->Dev);
+}
+
+static BOOLEAN NTAPI LkpiIsr(PKINTERRUPT Interrupt, PVOID Ctx)
+{
+    LKPI_IRQ *Q = Ctx;
+    int R = Q->Handler(Q->Irq, Q->Dev);       /* IRQ_NONE 0, IRQ_HANDLED 1, IRQ_WAKE_THREAD 2 */
+
+    if (R == 2 && Q->Thread)
+    {
+        Q->ThreadPending = TRUE;
+        KeInsertQueueDpc(&Q->Dpc, NULL, NULL);
+    }
+    return R != 0;
+}
+
+void * LX_ABI nt_irq_connect(int Irq, int (LX_ABI *Handler)(int, void *), int (LX_ABI *Thread)(int, void *), void *Dev, int Shared)
+{
+    LKPI_IRQ *Q = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Q), LKPI_TAG);
+    ULONG Vector;
+    KIRQL Irql;
+    KAFFINITY Affinity;
+    NTSTATUS Status;
+
+    if (!Q) return NULL;
+    RtlZeroMemory(Q, sizeof(*Q));
+    Q->Irq = Irq; Q->Dev = Dev; Q->Handler = Handler; Q->Thread = Thread;
+    KeInitializeDpc(&Q->Dpc, LkpiIrqDpc, Q);
+    Vector = HalGetInterruptVector(PCIBus, 0, (ULONG)Irq, (ULONG)Irq, &Irql, &Affinity);
+    if (!Vector)
+    {
+        DbgPrint("LKPI: no interrupt vector for line %d\n", Irq);
+        ExFreePoolWithTag(Q, LKPI_TAG);
+        return NULL;
+    }
+    Status = IoConnectInterrupt(&Q->Obj, LkpiIsr, Q, NULL, Vector, Irql, Irql, LevelSensitive, Shared ? TRUE : FALSE, Affinity, FALSE);
+    if (!NT_SUCCESS(Status))
+    {
+        DbgPrint("LKPI: IoConnectInterrupt failed %08lx\n", Status);
+        ExFreePoolWithTag(Q, LKPI_TAG);
+        return NULL;
+    }
+    DbgPrint("LKPI: interrupt line %d connected (vector %lu, irql %u)\n", Irq, Vector, (unsigned)Irql);
+    return Q;
+}
+
+void LX_ABI nt_irq_disconnect(void *Handle)
+{
+    LKPI_IRQ *Q = Handle;
+    if (!Q) return;
+    IoDisconnectInterrupt(Q->Obj);
+    KeRemoveQueueDpc(&Q->Dpc);
+    ExFreePoolWithTag(Q, LKPI_TAG);
+}
+
+/* Reads \SystemRoot\system32\firmware\<name> (name uses '/' separators) into an nt_alloc'd buffer. */
+void * LX_ABI nt_read_firmware(const char *Name, lx_ulong *Size)
+{
+    WCHAR Path[260];
+    UNICODE_STRING Us;
+    OBJECT_ATTRIBUTES Oa;
+    IO_STATUS_BLOCK Iosb;
+    FILE_STANDARD_INFORMATION Info;
+    HANDLE File;
+    PVOID Buf = NULL;
+    NTSTATUS Status;
+    ULONG i, n;
+
+    n = RtlStringCbPrintfW(Path, sizeof(Path), L"\\SystemRoot\\system32\\firmware\\") == STATUS_SUCCESS ? (ULONG)wcslen(Path) : 0;
+    for (i = 0; Name[i] && n < RTL_NUMBER_OF(Path) - 1; i++) Path[n++] = Name[i] == '/' ? L'\\' : (WCHAR)Name[i];
+    Path[n] = 0;
+    RtlInitUnicodeString(&Us, Path);
+    InitializeObjectAttributes(&Oa, &Us, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+    Status = ZwCreateFile(&File, GENERIC_READ | SYNCHRONIZE, &Oa, &Iosb, NULL, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_OPEN,
+                          FILE_SYNCHRONOUS_IO_NONALERT | FILE_NON_DIRECTORY_FILE, NULL, 0);
+    if (!NT_SUCCESS(Status)) { DbgPrint("LKPI: firmware %s not found (%08lx)\n", Name, Status); return NULL; }
+    Status = ZwQueryInformationFile(File, &Iosb, &Info, sizeof(Info), FileStandardInformation);
+    if (NT_SUCCESS(Status) && Info.EndOfFile.QuadPart > 0 && Info.EndOfFile.QuadPart < 0x10000000)
+    {
+        Buf = nt_alloc((lx_ulong)Info.EndOfFile.QuadPart, 0);
+        if (Buf && NT_SUCCESS(ZwReadFile(File, NULL, NULL, NULL, &Iosb, Buf, (ULONG)Info.EndOfFile.QuadPart, NULL, NULL)))
+            *Size = (lx_ulong)Info.EndOfFile.QuadPart;
+        else { nt_free(Buf); Buf = NULL; }
+    }
+    ZwClose(File);
+    return Buf;
+}
+
 unsigned long long LX_ABI nt_ktime_ns(void)
 {
     return KeQueryInterruptTime() * 100ULL;
@@ -409,6 +514,9 @@ const LKPI_EXPORT LkpiExports[] =
     { "nt_virt_to_phys", (PVOID)nt_virt_to_phys },
     { "nt_pci_cfg_read", (PVOID)nt_pci_cfg_read },
     { "nt_pci_cfg_write", (PVOID)nt_pci_cfg_write },
+    { "nt_irq_connect", (PVOID)nt_irq_connect },
+    { "nt_irq_disconnect", (PVOID)nt_irq_disconnect },
+    { "nt_read_firmware", (PVOID)nt_read_firmware },
     { "nt_current_tid", (PVOID)nt_current_tid },
     { "nt_raise_dispatch", (PVOID)nt_raise_dispatch },
     { "nt_lower_irql", (PVOID)nt_lower_irql },

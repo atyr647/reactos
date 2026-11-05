@@ -345,3 +345,5 @@ void agp_free_memory(struct agp_memory *curr) { }
 /* ---- tracepoint left over from mmap_lock.h --------------------------------------------------- */
 struct tracepoint __tracepoint_mmap_lock_released;
 void __mmap_lock_do_trace_released(struct mm_struct *mm, bool write) { }
+
+int page_is_ram(unsigned long pfn) { return pfn >= region_pfn0 && pfn < region_pfn0 + region_pages; }
