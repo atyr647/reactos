@@ -306,6 +306,31 @@ LkpiLoadModule(PCUNICODE_STRING Path, PLKPI_MODULE *Out)
     DbgPrint("LKPI: loaded module: %lu bytes in memory at %p, init=%p exit=%p\n", (ULONG)M->RegionSize, M->Region, M->InitFn, M->ExitFn);
     M->Next = LkpiLoaded;
     LkpiLoaded = M;
+
+    /* Symbols that earlier modules could not resolve (they were bound to traps) may be provided by this one:
+     * patch their GOT slots. This allows modules that depend on each other (kpi <-> kpi2) to load in sequence. */
+    {
+        PLKPI_MODULE O;
+        ULONG Fixed = 0;
+
+        for (O = M->Next; O; O = O->Next)
+        {
+            ULONG k;
+            for (k = 1; k < O->NumSyms; k++)
+            {
+                PUCHAR Trap = O->Stubs + (SIZE_T)O->NumSyms * STUB_SIZE + (SIZE_T)k * TRAP_SIZE;
+                PVOID A;
+
+                if (O->SymAddr[k] != (ULONG64)(ULONG_PTR)Trap) continue;
+                A = LkpiFindExport(O->StrTab + O->Syms[k].st_name);
+                if (!A) continue;
+                O->SymAddr[k] = (ULONG64)(ULONG_PTR)A;
+                *(ULONG64 *)(O->Stubs + (SIZE_T)k * STUB_SIZE) = (ULONG64)(ULONG_PTR)A;
+                Fixed++;
+            }
+        }
+        if (Fixed) DbgPrint("LKPI: bound %lu previously unresolved symbols\n", Fixed);
+    }
     *Out = M;
     return STATUS_SUCCESS;
 
