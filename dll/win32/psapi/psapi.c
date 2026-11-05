@@ -457,6 +457,24 @@ EnumProcesses(DWORD *lpidProcess,
 }
 
 
+BOOL WINAPI EnumProcessModules(HANDLE, HMODULE *, DWORD, LPDWORD);
+
+/*
+ * @implemented
+ * The filter flag (LIST_MODULES_32BIT/64BIT/ALL) is accepted but all loader-list modules are returned.
+ */
+BOOL
+WINAPI
+EnumProcessModulesEx(HANDLE hProcess,
+                     HMODULE *lphModule,
+                     DWORD cb,
+                     LPDWORD lpcbNeeded,
+                     DWORD dwFilterFlag)
+{
+    UNREFERENCED_PARAMETER(dwFilterFlag);
+    return EnumProcessModules(hProcess, lphModule, cb, lpcbNeeded);
+}
+
 /*
  * @implemented
  */
