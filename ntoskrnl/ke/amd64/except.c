@@ -741,6 +741,11 @@ KiGeneralProtectionFaultHandler(
         return STATUS_ACCESS_VIOLATION;
     }
 
+    DPRINT1("Unhandled #GP in %s mode at %p: %02x %02x %02x %02x %02x %02x %02x %02x, rsp %p rax %p rcx %p rdx %p\n",
+            (TrapFrame->SegCs & 3) ? "user" : "kernel", (PVOID)TrapFrame->Rip,
+            Instructions[0], Instructions[1], Instructions[2], Instructions[3],
+            Instructions[4], Instructions[5], Instructions[6], Instructions[7],
+            (PVOID)TrapFrame->Rsp, (PVOID)TrapFrame->Rax, (PVOID)TrapFrame->Rcx, (PVOID)TrapFrame->Rdx);
     ASSERT(FALSE);
     return STATUS_UNSUCCESSFUL;
 }
