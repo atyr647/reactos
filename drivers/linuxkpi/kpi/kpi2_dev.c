@@ -88,9 +88,16 @@ u64 nsecs_to_jiffies64(u64 n) { return n / (NSEC_PER_SEC / HZ); }
 bool is_vmalloc_addr(const void *x) { return false; }
 loff_t noop_llseek(struct file *file, loff_t offset, int whence) { return file->f_pos; }
 void si_meminfo(struct sysinfo *val) { memset(val, 0, sizeof(*val)); val->totalram = 1UL << 20; val->freeram = 1UL << 19; val->mem_unit = 4096; }
-int __get_user_4(void) { return 0; }
-void __put_user_4(void) { }
-void __put_user_8(void) { }
+/* get_user()/put_user() helpers with the x86-64 kernel convention: address in %rax (get) / %rcx (put), value in %rdx (get result)
+ * or %rax (put value), error code in %eax. User and kernel addresses are the same here. */
+__asm__(".globl __get_user_1\n__get_user_1:\n\tmovzbl (%rax),%edx\n\txor %eax,%eax\n\tret\n"
+	".globl __get_user_2\n__get_user_2:\n\tmovzwl (%rax),%edx\n\txor %eax,%eax\n\tret\n"
+	".globl __get_user_4\n__get_user_4:\n\tmovl (%rax),%edx\n\txor %eax,%eax\n\tret\n"
+	".globl __get_user_8\n__get_user_8:\n\tmovq (%rax),%rdx\n\txor %eax,%eax\n\tret\n"
+	".globl __put_user_1\n__put_user_1:\n\tmovb %al,(%rcx)\n\txor %ecx,%ecx\n\txor %eax,%eax\n\tret\n"
+	".globl __put_user_2\n__put_user_2:\n\tmovw %ax,(%rcx)\n\txor %ecx,%ecx\n\txor %eax,%eax\n\tret\n"
+	".globl __put_user_4\n__put_user_4:\n\tmovl %eax,(%rcx)\n\txor %ecx,%ecx\n\txor %eax,%eax\n\tret\n"
+	".globl __put_user_8\n__put_user_8:\n\tmovq %rax,(%rcx)\n\txor %ecx,%ecx\n\txor %eax,%eax\n\tret\n");
 void sched_set_fifo(struct task_struct *p) { }
 struct task_struct *pid_task(struct pid *pid, enum pid_type type) { return NULL; }
 pid_t pid_vnr(struct pid *pid) { return 0; }
