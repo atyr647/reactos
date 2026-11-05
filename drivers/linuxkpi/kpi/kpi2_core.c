@@ -271,6 +271,7 @@ bool queue_work_on(int cpu, struct workqueue_struct *wq, struct work_struct *wor
 
 	if (test_and_set_bit(WORK_STRUCT_PENDING_BIT, work_data_bits(work)))
 		return false;
+	atomic_long_set(&work->data, (long)wq | 1);	/* remember the queue for flush_work(), keep the pending bit */
 	spin_lock_irqsave(&wq->lock, flags);
 	list_add_tail(&work->entry, &wq->list);
 	spin_unlock_irqrestore(&wq->lock, flags);
@@ -286,6 +287,8 @@ void delayed_work_timer_fn(struct timer_list *t)
 {
 	struct delayed_work *dwork = from_timer(dwork, t, timer);
 
+	/* the work was marked pending when the delay was armed; hand it to the queue now */
+	clear_bit(WORK_STRUCT_PENDING_BIT, work_data_bits(&dwork->work));
 	queue_work_on(0, dwork->wq, &dwork->work);
 }
 
@@ -297,6 +300,7 @@ bool queue_delayed_work_on(int cpu, struct workqueue_struct *wq, struct delayed_
 		return false;
 	dwork->wq = wq;
 	dwork->cpu = cpu;
+	atomic_long_set(&dwork->work.data, (long)wq | 1);
 	mod_timer(&dwork->timer, jiffies + delay);
 	return true;
 }
@@ -348,9 +352,10 @@ bool cancel_work_sync(struct work_struct *work) { return kpi_cancel_work(work, s
 bool flush_work(struct work_struct *work)
 {
 	bool waited = false;
+	struct workqueue_struct *wq = (struct workqueue_struct *)(atomic_long_read(&work->data) & ~7UL);
 
-	while (test_bit(WORK_STRUCT_PENDING_BIT, work_data_bits(work)) ||
-	       system_wq->current_work == work) {
+	if (!wq) wq = system_wq;
+	while (test_bit(WORK_STRUCT_PENDING_BIT, work_data_bits(work)) || wq->current_work == work) {
 		waited = true;
 		nt_sleep_ms(1);
 	}
