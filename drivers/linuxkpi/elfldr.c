@@ -333,6 +333,7 @@ LkpiLoadModule(PCUNICODE_STRING Path, PLKPI_MODULE *Out)
                 O->SymAddr[k] = (ULONG64)(ULONG_PTR)A;
                 *(ULONG64 *)(O->Stubs + (SIZE_T)k * STUB_SIZE) = (ULONG64)(ULONG_PTR)A;
                 Fixed++;
+                DbgPrint("LKPI:   bound '%s' in an earlier module to %p\n", O->StrTab + O->Syms[k].st_name, A);
             }
         }
         if (Fixed) DbgPrint("LKPI: bound %lu previously unresolved symbols\n", Fixed);
