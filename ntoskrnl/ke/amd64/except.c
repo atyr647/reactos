@@ -365,6 +365,16 @@ KiDispatchException(IN PEXCEPTION_RECORD ExceptionRecord,
                                 }
                             }
                         }
+                        if (Context.Rip < (ULONG64)MmUserProbeAddress)
+                        {
+                            PUCHAR Code = (PUCHAR)Context.Rip;
+                            DPRINT1("UM-AV   code-16: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
+                                    Code[-16], Code[-15], Code[-14], Code[-13], Code[-12], Code[-11], Code[-10], Code[-9],
+                                    Code[-8], Code[-7], Code[-6], Code[-5], Code[-4], Code[-3], Code[-2], Code[-1]);
+                            DPRINT1("UM-AV   code@rip: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
+                                    Code[0], Code[1], Code[2], Code[3], Code[4], Code[5], Code[6], Code[7],
+                                    Code[8], Code[9], Code[10], Code[11], Code[12], Code[13], Code[14], Code[15]);
+                        }
                         if (Context.Rsp < (ULONG64)MmUserProbeAddress)
                         {
                             for (i = 0; i < 24; i += 4)
