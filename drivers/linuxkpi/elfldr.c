@@ -278,7 +278,14 @@ LkpiLoadModule(PCUNICODE_STRING Path, PLKPI_MODULE *Out)
                 case R_X86_64_PC32:
                 case R_X86_64_PLT32:
                     V = (LONG64)(S + R[j].r_addend - (ULONG64)(ULONG_PTR)P);
-                    if (V != (LONG)V)
+                    if (Type == R_X86_64_PLT32 && SymIdx < M->NumSyms && M->Syms[SymIdx].st_shndx == SHN_UNDEF)
+                    {
+                        /* calls to symbols of other modules go through the stub so that a trapped (not yet
+                         * resolved) symbol can be re-bound later by patching its GOT slot */
+                        V = (LONG64)((ULONG64)(ULONG_PTR)(Stub + 8) + R[j].r_addend - (ULONG64)(ULONG_PTR)P);
+                        if (V != (LONG)V) FAIL("PLT32 stub out of range");
+                    }
+                    else if (V != (LONG)V)
                     {
                         /* out of range (symbol lives in the host driver): go through the stub */
                         if (Type == R_X86_64_PC32 && SymIdx >= M->NumSyms) FAIL("PC32 out of range");
