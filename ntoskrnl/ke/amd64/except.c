@@ -351,21 +351,28 @@ KiDispatchException(IN PEXCEPTION_RECORD ExceptionRecord,
                     _SEH2_TRY
                     {
                         PPEB Peb = PsGetCurrentProcess()->Peb;
+                        ULONG64 Probe[2];
+                        ULONG pi;
+                        Probe[0] = Context.Rip;
+                        Probe[1] = (Context.Rsp >= 0x10000 && Context.Rsp + 8 < (ULONG64)MmUserProbeAddress) ? Stk[0] : 0;
                         if (Peb && Peb->Ldr)
                         {
-                            PLIST_ENTRY Head = &Peb->Ldr->InLoadOrderModuleList, Ent;
-                            for (Ent = Head->Flink; Ent != Head && Ent; Ent = Ent->Flink)
+                            for (pi = 0; pi < 2; pi++)
                             {
-                                PLDR_DATA_TABLE_ENTRY M = CONTAINING_RECORD(Ent, LDR_DATA_TABLE_ENTRY, InLoadOrderLinks);
-                                if (Context.Rip >= (ULONG64)M->DllBase && Context.Rip < (ULONG64)M->DllBase + M->SizeOfImage)
+                                PLIST_ENTRY Head = &Peb->Ldr->InLoadOrderModuleList, Ent;
+                                for (Ent = Head->Flink; Ent != Head && Ent; Ent = Ent->Flink)
                                 {
-                                    DPRINT1("UM-AV   rip is in %wZ +%lx (base %p)\n", &M->BaseDllName,
-                                            (ULONG)(Context.Rip - (ULONG64)M->DllBase), M->DllBase);
-                                    break;
+                                    PLDR_DATA_TABLE_ENTRY M = CONTAINING_RECORD(Ent, LDR_DATA_TABLE_ENTRY, InLoadOrderLinks);
+                                    if (Probe[pi] >= (ULONG64)M->DllBase && Probe[pi] < (ULONG64)M->DllBase + M->SizeOfImage)
+                                    {
+                                        DPRINT1("UM-AV   %s %p is in %wZ +%lx (base %p)\n", pi ? "[rsp]" : "rip", (PVOID)Probe[pi],
+                                                &M->BaseDllName, (ULONG)(Probe[pi] - (ULONG64)M->DllBase), M->DllBase);
+                                        break;
+                                    }
                                 }
                             }
                         }
-                        if (Context.Rip < (ULONG64)MmUserProbeAddress)
+                        if (Context.Rip >= 0x10000 && Context.Rip + 16 < (ULONG64)MmUserProbeAddress)
                         {
                             PUCHAR Code = (PUCHAR)Context.Rip;
                             DPRINT1("UM-AV   code-16: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
