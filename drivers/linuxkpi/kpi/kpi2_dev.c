@@ -455,7 +455,7 @@ int get_unused_fd_flags(unsigned flags) { return -ENOSYS; }
 void put_unused_fd(unsigned int fd) { }
 void fd_install(unsigned int fd, struct file *file) { }
 struct fd fdget(unsigned int fd) { struct fd f = { 0 }; return f; }
-void fput(struct file *file) { }
+void fput(struct file *file) { if (file) { kfree(file->f_inode); kfree(file); } }
 void iput(struct inode *inode) { if (inode) kfree(inode); }
 struct file *anon_inode_getfile(const char *name, const struct file_operations *fops, void *priv, int flags) { return ERR_PTR(-ENOSYS); }
 struct inode *alloc_anon_inode(struct super_block *s)
@@ -472,7 +472,20 @@ struct inode *alloc_anon_inode(struct super_block *s)
 struct file *dentry_open(const struct path *path, int flags, const struct cred *cred) { return ERR_PTR(-ENOSYS); }
 int init_pseudo(struct fs_context *fc, unsigned long magic) { return -ENOSYS; }
 void kill_anon_super(struct super_block *sb) { }
-struct file *shmem_file_setup(const char *name, loff_t size, unsigned long flags) { return ERR_PTR(-ENOSYS); }
+struct file *shmem_file_setup(const char *name, loff_t size, unsigned long flags)
+{
+	/* A file whose mapping is never backed by pages: enough for DRM's GEM objects, which only keep it around */
+	struct file *f = kzalloc(sizeof(*f), GFP_KERNEL);
+	struct inode *inode = kzalloc(sizeof(*inode), GFP_KERNEL);
+
+	if (!f || !inode) { kfree(f); kfree(inode); return ERR_PTR(-ENOMEM); }
+	inode->i_mapping = &inode->i_data;
+	inode->i_data.host = inode;
+	inode->i_size = size;
+	f->f_inode = inode;
+	f->f_mapping = &inode->i_data;
+	return f;
+}
 void unmap_mapping_range(struct address_space *mapping, loff_t const holebegin, loff_t const holelen, int even_cows) { }
 
 /* ---- firmware framebuffer / aperture, i2c, acpi, hdmi, components, video: nothing to do --------- */
