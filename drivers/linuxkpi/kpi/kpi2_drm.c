@@ -12,7 +12,7 @@
 #include <drm/drm_drv.h>
 #include <drm/drm_device.h>
 
-static const struct file_operations kpi_dummy_fops;   /* drm_open_helper() reads filp->f_op->fop_flags */
+static const struct file_operations kpi_dummy_fops = { .fop_flags = FOP_UNSIGNED_OFFSET };   /* drm_open_helper() checks this */
 
 struct kpi_drm_handle {
 	struct inode inode;
