@@ -29,6 +29,13 @@ triangle every frame. DXVK finds `llvmpipe (LLVM 18.1.3)` through the Vulkan loa
 entry points (shared resources / keyed mutex); they are stubs returning STATUS_NOT_SUPPORTED
 (`win32ss/gdi/gdi32_vista/d3dkmt_share.c`).
 
+## vkd3d-proton (D3D12)
+`d3d12test.c` loads vkd3d-proton 3.1's `d3d12.dll` + DXVK's `dxgi.dll`, creates a D3D12 device (FL 11_0), direct queue,
+fence, flip-model swapchain, RTV heap and records/executes clear + barriers each frame with fence sync. All calls
+succeed on lavapipe and the window shows the animated clear colour. vkd3d-proton needed `PathCchCombineEx` /
+`PathCchRemoveFileSpec` (`api-ms-win-core-path-l1-1-0`); minimal PathCch* helpers were added to kernel32 (exported
+`-private` so shell32, which links its own copy, still builds).
+
 ## Pitfalls found while bringing this up (all fixed in the patch / tests)
 * The loader's GAS trampolines for unknown device/physical-device extension functions assumed the System V x64 ABI
   (`rdi`); on Windows x64 the first argument is `rcx`. DXVK calls such functions, so it crashed in the loader.

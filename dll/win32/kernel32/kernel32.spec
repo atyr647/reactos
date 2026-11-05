@@ -723,6 +723,12 @@
 @ stdcall -version=0x600+ InitOnceComplete(ptr long ptr)
 @ stdcall -version=0x600+ InitOnceExecuteOnce(ptr ptr ptr ptr)
 @ stdcall -version=0x600+ WaitOnAddress(ptr ptr long long)
+@ stdcall -private -version=0x600+ PathCchCombineEx(ptr long wstr wstr long)
+@ stdcall -private -version=0x600+ PathCchCombine(ptr long wstr wstr)
+@ stdcall -private -version=0x600+ PathCchAppend(wstr long wstr)
+@ stdcall -private -version=0x600+ PathCchAddBackslash(wstr long)
+@ stdcall -private -version=0x600+ PathCchRemoveFileSpec(wstr long)
+@ stdcall -private -version=0x600+ PathCchFindExtension(wstr long ptr)
 @ stdcall -version=0x600+ WakeByAddressAll(ptr) ntdll.RtlWakeAddressAll
 @ stdcall -version=0x600+ WakeByAddressSingle(ptr) ntdll.RtlWakeAddressSingle
 @ stdcall -version=0x600+ InitOnceInitialize(ptr) ntdll.RtlRunOnceInitialize

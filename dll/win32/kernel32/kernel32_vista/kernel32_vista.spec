@@ -92,3 +92,9 @@
 @ stdcall WaitForThreadpoolTimerCallbacks(ptr long) ntdll_vista.TpWaitForTimer
 @ stdcall WaitForThreadpoolWaitCallbacks(ptr long) ntdll_vista.TpWaitForWait
 @ stdcall WaitForThreadpoolWorkCallbacks(ptr long) ntdll_vista.TpWaitForWork
+@ stdcall PathCchCombineEx(ptr long wstr wstr long)
+@ stdcall PathCchCombine(ptr long wstr wstr)
+@ stdcall PathCchAppend(wstr long wstr)
+@ stdcall PathCchAddBackslash(wstr long)
+@ stdcall PathCchRemoveFileSpec(wstr long)
+@ stdcall PathCchFindExtension(wstr long ptr)
