@@ -63,5 +63,6 @@ DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
         DbgPrint("LKPI: module %u init_module returned %d (status %08lx)\n", i, InitResult, Status);
         if (InitResult != 0) break;
     }
+    LkpiCreateDrmNodes(DriverObject);
     return STATUS_SUCCESS;
 }

@@ -2,7 +2,7 @@
 # usage: build2.sh <configured linux-6.12 tree> [outdir]   builds kpi2.ko (needs kpi.ko loaded first at run time)
 set -e
 SRC=$(cd "$1" && pwd); HERE=$(cd "$(dirname "$0")" && pwd); OUT=${2:-$HERE/out2}
-mkdir -p "$OUT"; cp "$HERE"/kpi2_core.c "$HERE"/kpi2_dev.c "$HERE"/kpi2_mm.c "$HERE"/kpi2_pci.c "$HERE"/kpi2_amd.c "$HERE"/kpi2_irq.c "$OUT"/; cp "$HERE"/Kbuild2 "$OUT"/Kbuild
+mkdir -p "$OUT"; cp "$HERE"/kpi2_core.c "$HERE"/kpi2_dev.c "$HERE"/kpi2_mm.c "$HERE"/kpi2_pci.c "$HERE"/kpi2_amd.c "$HERE"/kpi2_irq.c "$HERE"/kpi2_drm.c "$OUT"/; cp "$HERE"/Kbuild2 "$OUT"/Kbuild
 DMABUF="dma-fence dma-fence-chain dma-fence-unwrap dma-fence-array dma-resv"
 cp "$SRC/drivers/video/hdmi.c" "$OUT/hdmi.c"
 for f in $DMABUF; do cp "$SRC/drivers/dma-buf/$f.c" "$OUT/$f.c"; done

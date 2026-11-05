@@ -83,6 +83,12 @@ LkpiFindExport(const char *Name)
     return NULL;
 }
 
+PVOID
+LkpiLookupModuleSymbol(const char *Name)
+{
+    return LkpiFindExport(Name);
+}
+
 static NTSTATUS
 LkpiReadFile(PCUNICODE_STRING Path, PUCHAR *Data, PULONG Size)
 {

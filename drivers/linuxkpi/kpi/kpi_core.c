@@ -469,6 +469,7 @@ unsigned long page_offset_base;
 unsigned long vmemmap_base;
 unsigned long phys_base;
 struct task_struct kpi_task;
+static struct pid kpi_pid;
 struct pcpu_hot pcpu_hot = { .current_task = &kpi_task };
 extern const struct pcpu_hot const_pcpu_hot __attribute__((alias("pcpu_hot")));
 EXPORT_SYMBOL(page_offset_base); EXPORT_SYMBOL(vmemmap_base); EXPORT_SYMBOL(phys_base);
@@ -480,6 +481,11 @@ extern void radix_tree_init(void);
 static int __init kpi_init(void)
 {
 	radix_tree_init();            /* the xarray/idr node cache is normally created by start_kernel() */
+	refcount_set(&kpi_pid.count, 1);
+	kpi_task.thread_pid = &kpi_pid;
+	kpi_task.pid = kpi_task.tgid = 4;
+	kpi_task.group_leader = &kpi_task;
+	strscpy(kpi_task.comm, "ReactOS", sizeof(kpi_task.comm));
 	no_hash_pointers = true;      /* no boot-time random key available: print real pointers */
 	kpi_tick();
 	nt_register_tick(kpi_tick);

@@ -1,4 +1,4 @@
 # Out-of-tree Linux module: LinuxKPI part 2 (dma-fence, dma-resv, workqueue, device model...). See build2.sh.
 obj-m += kpi2.o
-kpi2-y := kpi2_core.o kpi2_dev.o kpi2_mm.o kpi2_pci.o kpi2_amd.o kpi2_irq.o $(patsubst %.c,%.o,$(notdir $(KPI2_SRCS)))
+kpi2-y := kpi2_core.o kpi2_dev.o kpi2_mm.o kpi2_pci.o kpi2_amd.o kpi2_irq.o kpi2_drm.o $(patsubst %.c,%.o,$(notdir $(KPI2_SRCS)))
 ccflags-y := -I$(srctree)/drivers/dma-buf -I$(srctree)/lib -Wno-unused-function -Wno-error
