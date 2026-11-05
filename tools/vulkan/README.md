@@ -54,5 +54,11 @@ succeed on lavapipe and the window shows the animated clear colour. vkd3d-proton
 * llvmpipe's JIT needs all sections within 2 GiB of each other (COFF RIP-relative relocations): `patch-mesa.py`
   switches to the Large code model and an arena memory manager.
 
+* Open: with `-cpu Nehalem` Godot 4.7.2 (mobile renderer, 400x300) gets as far as drawing, then llvmpipe-generated
+  code calls a NULL function pointer (`UM-AV ... rip 0`, return address inside the JIT arena; the kernel log shows
+  registers and a stack dump). `EnumProcessModulesEx` is implemented now but is not the cause. Next step: log
+  unresolved/NULL symbols in the arena memory manager (`getSymbolAddress`) and capture the shader that triggers it
+  (`LP_DEBUG`/`GALLIVM_DEBUG`).
+
 ## Next gates
 vkcube (win32 WSI), DXVK D3D11 sample, vkd3d-proton D3D12 sample, then radv on amdgpu (LinuxKPI).
