@@ -52,6 +52,13 @@ DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
         }
         LkpiModules[LkpiModuleCount++] = M;
         Status = LkpiRunInit(M, &InitResult);
+        if (Status == STATUS_ENTRYPOINT_NOT_FOUND)
+        {
+            /* library modules (drm_kms_helper, ...) have no init function */
+            DbgPrint("LKPI: module %u has no init_module\n", i);
+            InitResult = 0;
+            continue;
+        }
         DbgPrint("LKPI: module %u init_module returned %d (status %08lx)\n", i, InitResult, Status);
         if (InitResult != 0) break;
     }
