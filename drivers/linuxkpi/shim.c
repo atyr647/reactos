@@ -213,6 +213,34 @@ lx_ulong LX_ABI nt_virt_to_phys(void *Va)
     return (lx_ulong)MmGetPhysicalAddress(Va).QuadPart;
 }
 
+
+/* ---- PCI configuration space through the HAL (bus numbers/devfn as Linux sees them) ---------- */
+
+int LX_ABI nt_pci_cfg_read(unsigned int Bus, unsigned int DevFn, unsigned int Off, unsigned int Len, unsigned int *Val)
+{
+    PCI_SLOT_NUMBER Slot;
+    ULONG Got;
+
+    Slot.u.AsULONG = 0;
+    Slot.u.bits.DeviceNumber = DevFn >> 3;
+    Slot.u.bits.FunctionNumber = DevFn & 7;
+    *Val = 0;
+    Got = HalGetBusDataByOffset(PCIConfiguration, Bus, Slot.u.AsULONG, Val, Off, Len);
+    return Got == Len ? 0 : -1;
+}
+
+int LX_ABI nt_pci_cfg_write(unsigned int Bus, unsigned int DevFn, unsigned int Off, unsigned int Len, unsigned int Val)
+{
+    PCI_SLOT_NUMBER Slot;
+    ULONG Got;
+
+    Slot.u.AsULONG = 0;
+    Slot.u.bits.DeviceNumber = DevFn >> 3;
+    Slot.u.bits.FunctionNumber = DevFn & 7;
+    Got = HalSetBusDataByOffset(PCIConfiguration, Bus, Slot.u.AsULONG, &Val, Off, Len);
+    return Got == Len ? 0 : -1;
+}
+
 unsigned long long LX_ABI nt_ktime_ns(void)
 {
     return KeQueryInterruptTime() * 100ULL;
@@ -299,6 +327,8 @@ const LKPI_EXPORT LkpiExports[] =
     { "nt_map_pfns", (PVOID)nt_map_pfns },
     { "nt_unmap_pfns", (PVOID)nt_unmap_pfns },
     { "nt_virt_to_phys", (PVOID)nt_virt_to_phys },
+    { "nt_pci_cfg_read", (PVOID)nt_pci_cfg_read },
+    { "nt_pci_cfg_write", (PVOID)nt_pci_cfg_write },
     { "nt_current_tid", (PVOID)nt_current_tid },
     { "nt_raise_dispatch", (PVOID)nt_raise_dispatch },
     { "nt_lower_irql", (PVOID)nt_lower_irql },
