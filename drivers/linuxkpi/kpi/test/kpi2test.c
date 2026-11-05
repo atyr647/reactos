@@ -10,6 +10,11 @@
 #include <linux/delay.h>
 #include <linux/completion.h>
 #include <linux/ww_mutex.h>
+#include <linux/gfp.h>
+#include <linux/mm.h>
+#include <linux/vmalloc.h>
+#include <linux/dma-mapping.h>
+#include <linux/io.h>
 
 static int failures;
 #define CHECK(c, what) do { if (c) pr_info("kpi2test: ok   %s\n", what); else { failures++; pr_err("kpi2test: FAIL %s\n", what); } } while (0)
@@ -87,6 +92,42 @@ static int __init kpi2test_init(void)
 	CHECK(ww_mutex_lock(&wm, NULL) == 0, "ww_mutex_lock");
 	CHECK(ww_mutex_trylock(&wm, NULL) == 0, "ww_mutex_trylock fails when held");
 	ww_mutex_unlock(&wm);
+
+	/* memory layer */
+	{
+		struct page *pg = alloc_pages(GFP_KERNEL | __GFP_ZERO, 2);
+		unsigned char *a;
+		struct page *three[3], *pgs[2];
+		dma_addr_t dma;
+		void *cpu, *vm;
+
+		CHECK(pg != NULL, "alloc_pages(order 2)");
+		if (pg) {
+			a = page_address(pg);
+			CHECK(a[0] == 0 && a[4 * 4096 - 1] == 0, "pages are zeroed");
+			memset(a, 0xA5, 4 * 4096);
+			CHECK(virt_to_page(a + 8192) == pg + 2, "virt_to_page(page_address()) round trip");
+			CHECK(page_to_phys(pg) == virt_to_phys(a), "page_to_phys == virt_to_phys");
+			__free_pages(pg, 2);
+		}
+		three[0] = alloc_page(GFP_KERNEL); three[1] = alloc_page(GFP_KERNEL); three[2] = alloc_page(GFP_KERNEL);
+		__free_page(three[1]);
+		pgs[0] = three[0]; pgs[1] = three[2];
+		*(int *)page_address(three[0]) = 0x1111; *(int *)page_address(three[2]) = 0x2222;
+		vm = vmap(pgs, 2, VM_MAP, PAGE_KERNEL);
+		CHECK(vm != NULL, "vmap of two pages");
+		if (vm) {
+			CHECK(*(int *)vm == 0x1111 && *(int *)((char *)vm + 4096) == 0x2222, "vmap contents match");
+			vunmap(vm);
+		}
+		__free_page(three[0]); __free_page(three[2]);
+		cpu = dma_alloc_coherent(&dev, 8192, &dma, GFP_KERNEL);
+		CHECK(cpu != NULL && dma != 0, "dma_alloc_coherent");
+		if (cpu) {
+			CHECK(dma == virt_to_phys(cpu), "dma address == physical address");
+			dma_free_coherent(&dev, 8192, cpu, dma);
+		}
+	}
 
 	pr_info("kpi2test: %s (%d failures)\n", failures ? "FAIL" : "PASS", failures);
 	return 0;

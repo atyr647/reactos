@@ -388,8 +388,14 @@ void destroy_workqueue(struct workqueue_struct *wq)
 
 struct work_struct *current_work(void) { return system_wq->current_work; }
 
+extern int kpi_mm_init(void);
+
 static int __init kpi2_init(void)
 {
+	int ret = kpi_mm_init();
+
+	if (ret)
+		return ret;
 	kpi_system_wqs_init();
 	return 0;
 }

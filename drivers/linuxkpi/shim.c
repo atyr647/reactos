@@ -147,6 +147,72 @@ int LX_ABI nt_thread_spawn(void (LX_ABI *Fn)(void *), void *Arg)
     return 0;
 }
 
+
+/* ---- memory bridge for the Linux page layer (kpi2_mm.c) ---------------------------------------- */
+
+/* One physically contiguous region that backs all Linux "system memory" (alloc_pages, dma_alloc_*).
+ * Linux's direct map then is simply va = pa + (va0 - pa0). Returns the kernel VA, fills *Phys. */
+void * LX_ABI nt_contig_alloc(lx_ulong Size, lx_ulong *Phys)
+{
+    PHYSICAL_ADDRESS Low, High, Bound, Pa;
+    PVOID Va;
+
+    Low.QuadPart = 0; High.QuadPart = 0xFFFFFFFFFFFFULL; Bound.QuadPart = 0;
+    Va = MmAllocateContiguousMemorySpecifyCache((SIZE_T)Size, Low, High, Bound, MmCached);
+    if (!Va) return NULL;
+    Pa = MmGetPhysicalAddress(Va);
+    *Phys = (lx_ulong)Pa.QuadPart;
+    RtlZeroMemory(Va, (SIZE_T)Size);
+    return Va;
+}
+
+void LX_ABI nt_contig_free(void *Va, lx_ulong Size)
+{
+    MmFreeContiguousMemory(Va);
+}
+
+void * LX_ABI nt_ioremap(lx_ulong Phys, lx_ulong Size, int Cache)
+{
+    PHYSICAL_ADDRESS Pa;
+    Pa.QuadPart = (LONGLONG)Phys;
+    return MmMapIoSpace(Pa, (SIZE_T)Size, Cache == 2 ? MmWriteCombined : (Cache == 1 ? MmCached : MmNonCached));
+}
+
+void LX_ABI nt_iounmap(void *Va, lx_ulong Size) { MmUnmapIoSpace(Va, (SIZE_T)Size); }
+
+/* Map an arbitrary list of physical page frames into one contiguous kernel VA range (vmap). */
+void * LX_ABI nt_map_pfns(const lx_ulong *Pfns, ULONG Count, int Cache, void **MdlOut)
+{
+    PMDL Mdl = IoAllocateMdl(NULL, Count * PAGE_SIZE, FALSE, FALSE, NULL);
+    PPFN_NUMBER Arr;
+    PVOID Va;
+    ULONG i;
+
+    if (!Mdl) return NULL;
+    Mdl->MdlFlags |= MDL_PAGES_LOCKED | MDL_PAGES_LOCKED;
+    Mdl->ByteCount = Count * PAGE_SIZE;
+    Mdl->ByteOffset = 0;
+    Arr = MmGetMdlPfnArray(Mdl);
+    for (i = 0; i < Count; i++) Arr[i] = (PFN_NUMBER)Pfns[i];
+    Va = MmMapLockedPagesSpecifyCache(Mdl, KernelMode, Cache == 2 ? MmWriteCombined : MmCached, NULL, FALSE, NormalPagePriority);
+    if (!Va) { IoFreeMdl(Mdl); return NULL; }
+    *MdlOut = Mdl;
+    return Va;
+}
+
+void LX_ABI nt_unmap_pfns(void *Va, void *MdlPtr)
+{
+    PMDL Mdl = MdlPtr;
+    if (!Mdl) return;
+    MmUnmapLockedPages(Va, Mdl);
+    IoFreeMdl(Mdl);
+}
+
+lx_ulong LX_ABI nt_virt_to_phys(void *Va)
+{
+    return (lx_ulong)MmGetPhysicalAddress(Va).QuadPart;
+}
+
 unsigned long long LX_ABI nt_ktime_ns(void)
 {
     return KeQueryInterruptTime() * 100ULL;
@@ -226,6 +292,13 @@ const LKPI_EXPORT LkpiExports[] =
     { "nt_alloc_size", (PVOID)nt_alloc_size },
     { "nt_thread_spawn", (PVOID)nt_thread_spawn },
     { "nt_ktime_ns", (PVOID)nt_ktime_ns },
+    { "nt_contig_alloc", (PVOID)nt_contig_alloc },
+    { "nt_contig_free", (PVOID)nt_contig_free },
+    { "nt_ioremap", (PVOID)nt_ioremap },
+    { "nt_iounmap", (PVOID)nt_iounmap },
+    { "nt_map_pfns", (PVOID)nt_map_pfns },
+    { "nt_unmap_pfns", (PVOID)nt_unmap_pfns },
+    { "nt_virt_to_phys", (PVOID)nt_virt_to_phys },
     { "nt_current_tid", (PVOID)nt_current_tid },
     { "nt_raise_dispatch", (PVOID)nt_raise_dispatch },
     { "nt_lower_irql", (PVOID)nt_lower_irql },
