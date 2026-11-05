@@ -12,6 +12,8 @@
 #include <drm/drm_drv.h>
 #include <drm/drm_device.h>
 
+static const struct file_operations kpi_dummy_fops;   /* drm_open_helper() reads filp->f_op->fop_flags */
+
 struct kpi_drm_handle {
 	struct inode inode;
 	struct file file;
@@ -32,6 +34,7 @@ void *kpi_drm_open(int minor)
 	h->file.f_mapping = &h->inode.i_data;
 	h->file.f_mode = FMODE_READ | FMODE_WRITE;
 	h->file.f_flags = O_RDWR;
+	h->file.f_op = &kpi_dummy_fops;
 	r = drm_open(&h->inode, &h->file);
 	if (r) {
 		pr_err("kpi2_drm: drm_open(minor %d) failed: %d\n", minor, r);
