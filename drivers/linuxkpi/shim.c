@@ -87,7 +87,7 @@ typedef struct _LKPI_BLOCK { lx_ulong Size; lx_ulong Magic; } LKPI_BLOCK;
 
 void * LX_ABI nt_alloc(lx_ulong Size, int Zero)
 {
-    PLKPI_BLOCK b = ExAllocatePoolWithTag(NonPagedPool, (SIZE_T)(Size ? Size : 1) + sizeof(LKPI_BLOCK), LKPI_TAG);
+    LKPI_BLOCK *b = ExAllocatePoolWithTag(NonPagedPool, (SIZE_T)(Size ? Size : 1) + sizeof(LKPI_BLOCK), LKPI_TAG);
     if (!b) return NULL;
     b->Size = Size;
     b->Magic = LKPI_BLOCK_MAGIC;
@@ -97,9 +97,9 @@ void * LX_ABI nt_alloc(lx_ulong Size, int Zero)
 
 void LX_ABI nt_free(void *p)
 {
-    PLKPI_BLOCK b;
+    LKPI_BLOCK * b;
     if (!p) return;
-    b = (PLKPI_BLOCK)p - 1;
+    b = (LKPI_BLOCK *)p - 1;
     if (b->Magic != LKPI_BLOCK_MAGIC)
     {
         DbgPrint("LKPI: kfree of a pointer not from nt_alloc: %p\n", p);
@@ -111,9 +111,9 @@ void LX_ABI nt_free(void *p)
 
 lx_ulong LX_ABI nt_alloc_size(void *p)
 {
-    PLKPI_BLOCK b;
+    LKPI_BLOCK * b;
     if (!p) return 0;
-    b = (PLKPI_BLOCK)p - 1;
+    b = (LKPI_BLOCK *)p - 1;
     return b->Magic == LKPI_BLOCK_MAGIC ? b->Size : 0;
 }
 

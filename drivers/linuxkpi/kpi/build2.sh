@@ -11,3 +11,10 @@ sed -i -E '/^(early_initcall|core_initcall|subsys_initcall|late_initcall|device_
 SRCS="$(for f in $DMABUF; do echo -n "$f.c "; done) $(for f in $EXTRA; do echo -n "$f "; done)"
 make -C "$SRC" -j"$(nproc)" -k KBUILD_MODPOST_WARN=1 KCFLAGS="-mcmodel=small -fPIC" "KPI2_SRCS=$SRCS" modules M="$OUT" 2>&1 | grep -E "error|Error|warning: .*undefined|kpi2.ko" | head -40
 ls -la "$OUT"/kpi2.ko
+
+# optional self test module: build2.sh <tree> <out2> test  -> $OUT/kpi2test.ko
+if [ "$3" = "test" ]; then
+  T="$OUT/test"; mkdir -p "$T"; cp "$HERE/test/kpi2test.c" "$HERE/test/Kbuild" "$T/"
+  make -C "$SRC" -j"$(nproc)" -k KBUILD_MODPOST_WARN=1 KCFLAGS="-mcmodel=small -fPIC" modules M="$T" 2>&1 | grep -E " error|kpi2test.ko" | head
+  ls -la "$T"/kpi2test.ko
+fi
