@@ -92,3 +92,12 @@ xarray node cache, an in-memory "pseudo filesystem"/anon inode for DRM, Linux's 
   stack can talk to the driver (a `\Device\Drm0` with the DRM ioctls, then a libdrm shim for Mesa/radv)
 * real shmem/dma-buf, WC/UC cache attributes for system pages, larger/lazy system-memory region
 * amdgpu itself: ~700 symbols (measured earlier), `drm_sched`, `drm_exec`, `drm_buddy`, display core or none
+
+### amdgpu measurement (Linux 6.12, `CONFIG_DRM_AMDGPU=m`, DC/KFD/CIK/userptr off)
+`amdgpu.ko` (8 MB) + gpu-sched + drm_exec + drm_buddy + drm_suballoc_helper link against our modules except for
+**225 symbols** (list in `amdgpu_need.txt`; the 19 `nt_*` entries of the full list are host bridge functions):
+PCI (~37: MSI/MSI-X vectors, save/restore state, ROM, ReBAR, PCIe capabilities, power states), sysfs/kobject (~25),
+`drm_dp_*` helpers (build `drm_display_helper.ko`), IRQ (`request_threaded_irq`, enable/disable, irq_domain),
+pm_runtime (10), ACPI (10), debugfs helpers, hrtimers, firmware (`request_firmware`), iommu, dma-buf dynamic attach,
+perf pmu, kthreads, hwmon, backlight, i2c. Each is either a stub or a small host bridge; interrupts and firmware are
+the two that need real NT integration.
