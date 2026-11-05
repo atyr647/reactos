@@ -101,3 +101,25 @@ PCI (~37: MSI/MSI-X vectors, save/restore state, ROM, ReBAR, PCIe capabilities, 
 pm_runtime (10), ACPI (10), debugfs helpers, hrtimers, firmware (`request_firmware`), iommu, dma-buf dynamic attach,
 perf pmu, kthreads, hwmon, backlight, i2c. Each is either a stub or a small host bridge; interrupts and firmware are
 the two that need real NT integration.
+
+## Status: the full amdgpu module chain loads (QEMU)
+Boot log with `LKPI_MODULES = kpi.ko; kpi2.ko; drm.ko; drm_kms_helper.ko; ttm.ko; drm_ttm_helper.ko; drm_vram_helper.ko;
+drm_display_helper.ko; gpu-sched.ko; drm_exec.ko; drm_buddy.ko; drm_suballoc_helper.ko; amdxcp.ko; amdgpu.ko`:
+
+    [drm] amdgpu kernel modesetting enabled.
+    kpi2_pci: amdgpu bound 0 device(s)         (QEMU has no AMD GPU)
+
+Every external symbol of these 14 modules is provided (measured with `nm`; see `amdgpu_need.txt` for the history).
+What is real: memory/page layer, PCI config + BAR sizing + probe, interrupt connect (legacy line via the HAL), firmware
+file loading (`\\SystemRoot\\system32\\firmware\\<name>`, name with `/` -> `\\`), workqueues, timers, hrtimers, kthreads.
+What is a stub: sysfs/debugfs, runtime PM, ACPI, hwmon, backlight, i2c, perf, IOMMU, MSI/MSI-X (vector 0 = INTx only),
+dma-buf import/export, shmem, cache attributes (WC/UC) for system pages.
+
+### Trying it on real hardware (untested, expect failures)
+1. Put the GPU firmware on the CD/disk: from linux-firmware copy `amdgpu/*.bin` for your chip (Navi 31 / 7900 XT:
+   `amdgpu/gc_11_0_0_*.bin`, `psp_13_0_0_*.bin`, `smu_13_0_0.bin`, `sdma_6_0_0.bin`, `vcn_4_0_0.bin`, ...) into
+   `reactos\\system32\\firmware\\amdgpu\\` (the files are not shipped here: they are AMD's binary blobs).
+2. Build with the module list above, boot, `sc start linuxkpi`, and read the debug port. The first things that will
+   fail: INTx not routed (needs MSI support in the HAL), firmware names, ACPI/BIOS (VBIOS fetch), `pci_resize_resource`.
+3. Even if the driver initializes the card there is no user-mode path yet: the ioctl device and libdrm shim for Mesa
+   radv (see WDDM-BRIDGE.md, "C. One kernel ABI, two backends").
