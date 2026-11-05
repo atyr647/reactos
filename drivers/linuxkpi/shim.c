@@ -146,6 +146,8 @@ void * LX_ABI nt_alloc(lx_ulong Size, int Zero)
     if (!b)
     {
         /* large or arena exhausted: general pool (only valid at <= DISPATCH, and may fail when expanding there) */
+        if (KeGetCurrentIrql() > APC_LEVEL)
+            DbgPrint("LKPI: pool allocation of %lu bytes at IRQL %u (arena %s)\n", (ULONG)Size, (unsigned)KeGetCurrentIrql(), LkpiArena ? "exhausted/too small" : "missing");
         b = ExAllocatePoolWithTag(NonPagedPool, (SIZE_T)Size + sizeof(LKPI_BLOCK), LKPI_TAG);
         if (!b) return NULL;
         b->Tag = LKPI_BLOCK_MAGIC | 0xFF;
