@@ -81,14 +81,78 @@ lx_printk(const char *Fmt, lx_ulong a1, lx_ulong a2, lx_ulong a3, lx_ulong a4, l
 
 /* ---- bridge for the Linux-compiled core module (kpi.ko) ----------------------------------- */
 
+/* Allocations carry a 16-byte header with their size so ksize()/krealloc() work. */
+typedef struct _LKPI_BLOCK { lx_ulong Size; lx_ulong Magic; } LKPI_BLOCK;
+#define LKPI_BLOCK_MAGIC 0x4C4B5049424C4B31ULL
+
 void * LX_ABI nt_alloc(lx_ulong Size, int Zero)
 {
-    PVOID p = ExAllocatePoolWithTag(NonPagedPool, Size ? (SIZE_T)Size : 1, LKPI_TAG);
-    if (p && Zero) RtlZeroMemory(p, (SIZE_T)Size);
-    return p;
+    PLKPI_BLOCK b = ExAllocatePoolWithTag(NonPagedPool, (SIZE_T)(Size ? Size : 1) + sizeof(LKPI_BLOCK), LKPI_TAG);
+    if (!b) return NULL;
+    b->Size = Size;
+    b->Magic = LKPI_BLOCK_MAGIC;
+    if (Zero) RtlZeroMemory(b + 1, (SIZE_T)Size);
+    return b + 1;
 }
 
-void LX_ABI nt_free(void *p) { if (p) ExFreePoolWithTag(p, LKPI_TAG); }
+void LX_ABI nt_free(void *p)
+{
+    PLKPI_BLOCK b;
+    if (!p) return;
+    b = (PLKPI_BLOCK)p - 1;
+    if (b->Magic != LKPI_BLOCK_MAGIC)
+    {
+        DbgPrint("LKPI: kfree of a pointer not from nt_alloc: %p\n", p);
+        return;
+    }
+    b->Magic = 0;
+    ExFreePoolWithTag(b, LKPI_TAG);
+}
+
+lx_ulong LX_ABI nt_alloc_size(void *p)
+{
+    PLKPI_BLOCK b;
+    if (!p) return 0;
+    b = (PLKPI_BLOCK)p - 1;
+    return b->Magic == LKPI_BLOCK_MAGIC ? b->Size : 0;
+}
+
+/* Kernel threads for workqueues and timers: fn(arg) runs on a system thread until it returns. */
+typedef struct _LKPI_THREAD_START { void (LX_ABI *Fn)(void *); void *Arg; } LKPI_THREAD_START;
+
+static VOID NTAPI LkpiThreadMain(PVOID Ctx)
+{
+    LKPI_THREAD_START Start = *(LKPI_THREAD_START *)Ctx;
+    ExFreePoolWithTag(Ctx, LKPI_TAG);
+    Start.Fn(Start.Arg);
+    PsTerminateSystemThread(STATUS_SUCCESS);
+}
+
+int LX_ABI nt_thread_spawn(void (LX_ABI *Fn)(void *), void *Arg)
+{
+    HANDLE Th;
+    NTSTATUS Status;
+    LKPI_THREAD_START *Start = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Start), LKPI_TAG);
+
+    if (!Start) return -1;
+    Start->Fn = Fn;
+    Start->Arg = Arg;
+    Status = PsCreateSystemThread(&Th, THREAD_ALL_ACCESS, NULL, NULL, NULL, LkpiThreadMain, Start);
+    if (!NT_SUCCESS(Status))
+    {
+        ExFreePoolWithTag(Start, LKPI_TAG);
+        return -1;
+    }
+    ZwClose(Th);
+    return 0;
+}
+
+unsigned long long LX_ABI nt_ktime_ns(void)
+{
+    return KeQueryInterruptTime() * 100ULL;
+}
+
+lx_ulong LX_ABI nt_current_tid(void) { return (lx_ulong)PsGetCurrentThreadId(); }
 
 unsigned char LX_ABI nt_raise_dispatch(void)
 {
@@ -159,6 +223,10 @@ const LKPI_EXPORT LkpiExports[] =
 {
     { "nt_alloc", (PVOID)nt_alloc },
     { "nt_free", (PVOID)nt_free },
+    { "nt_alloc_size", (PVOID)nt_alloc_size },
+    { "nt_thread_spawn", (PVOID)nt_thread_spawn },
+    { "nt_ktime_ns", (PVOID)nt_ktime_ns },
+    { "nt_current_tid", (PVOID)nt_current_tid },
     { "nt_raise_dispatch", (PVOID)nt_raise_dispatch },
     { "nt_lower_irql", (PVOID)nt_lower_irql },
     { "nt_sleep_ms", (PVOID)nt_sleep_ms },

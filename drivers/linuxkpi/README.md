@@ -46,3 +46,24 @@ Relocation types seen: PC32, PLT32, GOTPCREL(X), REX_GOTPCRELX, 64, 32 (all supp
 * DRM core + TTM + bochs still need 269 more functions (see `drm_need.txt` workflow in the notes): memory
   (`alloc_pages`, struct page / vmemmap), device model (`devres`, class, kobject), vfs/seq_file/debugfs,
   workqueues, kthreads, timers, PCI, RCU, dma-buf, fences.
+
+## kpi2.ko (second core module, `kpi/build2.sh`)
+Built the same way as kpi.ko (`kpi/build2.sh <linux tree> <outdir>`), loaded second (`LKPI_MODULES="kpi.ko;kpi2.ko;..."`).
+It contains real Linux sources (`drivers/dma-buf/dma-fence*.c`, `dma-resv.c`) plus `kpi2_core.c` (workqueues, timers,
+RCU/irq_work stand-ins, tracepoint stubs, allocator helpers) and `kpi2_dev.c` (devres, struct device lifetime, class,
+debugfs/sysfs/seq_file stand-ins, ww_mutex, rwsem, SRCU, kthread workers, aperture/i2c/acpi stubs).
+The host driver gained `nt_alloc_size` (allocations now carry a size header), `nt_thread_spawn`, `nt_ktime_ns`.
+
+Measured for DRM + TTM + drm_kms_helper + vram_helper + bochs: 392 external symbols -> kpi 108 -> 284 -> kpi2 **69 left**:
+
+* memory: `__alloc_pages_noprof`, `__free_pages`, `copy_page`, `rep_stos_alternative`, `vmap/vunmap`, `vmalloc_to_page`,
+  `ioremap*`/`iounmap`/`memremap`, `set_pages_*_wc/uc/wb`, `pgprot_writecombine`, `vm_get_page_prot`, `vmf_insert_pfn_prot`,
+  `boot_cpu_data`, folio helpers, shrinkers
+* DMA API: `dma_alloc_attrs/free_attrs`, `dma_map_page_attrs`, `dma_map_sgtable`, `dma_unmap_*`, `dma_max_mapping_size`
+* PCI: `__pci_register_driver`, `pci_unregister_driver`, `pcim_enable_device`, `pci_request_region`, `pci_release_regions`
+* dma-buf (`dma_buf_*`), `sync_file_*`, `eventfd_*`, `hdmi_*` infoframes (real `drivers/video/hdmi.c` can be compiled in), agp stubs
+
+Design for the memory layer (not written yet): pages come from 2 MiB physically contiguous chunks obtained from NT;
+`struct page` array lives in a reserved virtual `vmemmap_base` region (committed per chunk); the tree's `__va()` is
+redirected to a chunk-table lookup (phys >> 21 -> kernel VA) instead of `page_offset_base + phys`, and `__pa()` to
+`MmGetPhysicalAddress`.
