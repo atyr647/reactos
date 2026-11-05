@@ -38,6 +38,7 @@ x86_64-w64-mingw32-strip -o out/vulkan-1.dll loader-build/loader/vulkan-1.dll
   -Dgles1=disabled -Dgles2=disabled -Dopengl=false -Degl=disabled -Dgbm=disabled -Dglx=disabled -Dshared-llvm=disabled \
   -Dcmake_prefix_path=$PWD/llvm-install -Dbuild-tests=false -Dvideo-codecs= -Dlibunwind=disabled -Dlmsensors=disabled \
   -Dzstd=disabled -Dxmlconfig=disabled -Dvulkan-layers= -Dtools=
+python3 $HERE/patch-mesa.py mesa
 ninja -C mesa-build
 L=mesa-build/src/gallium/targets/lavapipe
 x86_64-w64-mingw32-strip -o out/vulkan_lvp.dll $L/vulkan_lvp.dll

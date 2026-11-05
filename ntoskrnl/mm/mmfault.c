@@ -145,7 +145,8 @@ MmNotPresentFault(KPROCESSOR_MODE Mode,
          */
         if (Mode != KernelMode)
         {
-            DPRINT1("Address: %x\n", Address);
+            DPRINT1("User-mode access to kernel address %p (process %s)\n", (PVOID)Address,
+                    PsGetCurrentProcess()->ImageFileName);
             return(STATUS_ACCESS_VIOLATION);
         }
         AddressSpace = MmGetKernelAddressSpace();
