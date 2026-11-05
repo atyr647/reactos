@@ -70,3 +70,25 @@ Design for the memory layer (not written yet): pages come from 2 MiB physically 
 `struct page` array lives in a reserved virtual `vmemmap_base` region (committed per chunk); the tree's `__va()` is
 redirected to a chunk-table lookup (phys >> 21 -> kernel VA) instead of `page_offset_base + phys`, and `__pa()` to
 `MmGetPhysicalAddress`.
+
+## Milestone: a real Linux DRM driver runs on ReactOS x64 (QEMU)
+Unmodified Linux 6.12 `drm.ko`, `drm_kms_helper.ko`, `ttm.ko`, `drm_ttm_helper.ko`, `drm_vram_helper.ko` and `bochs.ko`
+load in the order above (`LKPI_MODULES="kpi.ko;kpi2.ko;drm.ko;drm_kms_helper.ko;ttm/ttm.ko;drm_ttm_helper.ko;
+drm_vram_helper.ko;tiny/bochs.ko"`, QEMU with `-vga std -device bochs-display`). The host's PCI layer finds both
+`1234:1111` devices and the driver reports:
+
+    [drm] Found bochs VGA, ID 0xb0c5.
+    [drm] Framebuffer size 16384 kB @ 0x80000000, mmio @ 0x820c7000.
+    [drm] Found EDID data blob.
+    [drm] Initialized bochs-drm 1.0.0 for 0000:00:01.0 on minor 0
+
+Things that had to be right (each was a crash on the way): 16-byte stack alignment for module code, lazy re-binding of
+symbols across modules, a DISPATCH_LEVEL-safe allocator (NonPagedPool cannot grow there), `radix_tree_init()` for the
+xarray node cache, an in-memory "pseudo filesystem"/anon inode for DRM, Linux's own `printk`.
+
+### Still to do toward amdgpu
+* interrupts (`request_irq` -> `IoConnectInterrupt`), MSI/MSI-X, PCI resource claiming, runtime PM
+* firmware loading (`request_firmware` from the CD/disk), ACPI/BIOS access, `/dev/dri` equivalent so a user-mode
+  stack can talk to the driver (a `\Device\Drm0` with the DRM ioctls, then a libdrm shim for Mesa/radv)
+* real shmem/dma-buf, WC/UC cache attributes for system pages, larger/lazy system-memory region
+* amdgpu itself: ~700 symbols (measured earlier), `drm_sched`, `drm_exec`, `drm_buddy`, display core or none
