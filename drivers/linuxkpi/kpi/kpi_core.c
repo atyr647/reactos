@@ -470,6 +470,7 @@ unsigned long vmemmap_base;
 unsigned long phys_base;
 struct task_struct kpi_task;
 static struct pid kpi_pid;
+static struct signal_struct kpi_signal;
 struct pcpu_hot pcpu_hot = { .current_task = &kpi_task };
 extern const struct pcpu_hot const_pcpu_hot __attribute__((alias("pcpu_hot")));
 EXPORT_SYMBOL(page_offset_base); EXPORT_SYMBOL(vmemmap_base); EXPORT_SYMBOL(phys_base);
@@ -483,6 +484,8 @@ static int __init kpi_init(void)
 	radix_tree_init();            /* the xarray/idr node cache is normally created by start_kernel() */
 	refcount_set(&kpi_pid.count, 1);
 	kpi_task.thread_pid = &kpi_pid;
+	kpi_signal.pids[PIDTYPE_TGID] = kpi_signal.pids[PIDTYPE_PID] = kpi_signal.pids[PIDTYPE_PGID] = kpi_signal.pids[PIDTYPE_SID] = &kpi_pid;
+	kpi_task.signal = &kpi_signal;
 	kpi_task.pid = kpi_task.tgid = 4;
 	kpi_task.group_leader = &kpi_task;
 	strscpy(kpi_task.comm, "ReactOS", sizeof(kpi_task.comm));
