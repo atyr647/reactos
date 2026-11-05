@@ -382,6 +382,17 @@ KiDispatchException(IN PEXCEPTION_RECORD ExceptionRecord,
                                     Code[0], Code[1], Code[2], Code[3], Code[4], Code[5], Code[6], Code[7],
                                     Code[8], Code[9], Code[10], Code[11], Code[12], Code[13], Code[14], Code[15]);
                         }
+                        if (Context.Rip < 0x10000 && Context.Rsp >= 0x10000 && Context.Rsp + 8 < (ULONG64)MmUserProbeAddress &&
+                            Stk[0] >= 0x10080 && Stk[0] < (ULONG64)MmUserProbeAddress - 0x40)
+                        {
+                            /* NULL call: dump the code leading up to the call site (return address in Stk[0]) */
+                            PUCHAR C = (PUCHAR)Stk[0] - 0x40;
+                            ULONG j;
+                            for (j = 0; j < 0x40; j += 16)
+                                DPRINT1("UM-AV   call-site-%02lx: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
+                                        0x40 - j, C[j], C[j+1], C[j+2], C[j+3], C[j+4], C[j+5], C[j+6], C[j+7],
+                                        C[j+8], C[j+9], C[j+10], C[j+11], C[j+12], C[j+13], C[j+14], C[j+15]);
+                        }
                         if (Context.Rsp < (ULONG64)MmUserProbeAddress)
                         {
                             for (i = 0; i < 24; i += 4)
