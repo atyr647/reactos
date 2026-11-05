@@ -475,8 +475,11 @@ EXPORT_SYMBOL(page_offset_base); EXPORT_SYMBOL(vmemmap_base); EXPORT_SYMBOL(phys
 EXPORT_SYMBOL(pcpu_hot); EXPORT_SYMBOL(const_pcpu_hot);
 
 /* ---- module glue ------------------------------------------------------------------------ */
+extern void radix_tree_init(void);
+
 static int __init kpi_init(void)
 {
+	radix_tree_init();            /* the xarray/idr node cache is normally created by start_kernel() */
 	no_hash_pointers = true;      /* no boot-time random key available: print real pointers */
 	kpi_tick();
 	nt_register_tick(kpi_tick);
