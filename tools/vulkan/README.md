@@ -46,5 +46,13 @@ succeed on lavapipe and the window shows the animated clear colour. vkd3d-proton
 * `OutputDebugString` raises an exception that vectored handlers see; a handler that logs with `OutputDebugString`
   recurses until the stack is gone. (An earlier note blaming `AddVectoredExceptionHandler` was wrong.)
 
+## Godot 4.7.2 (real engine) notes
+* Godot needs SSE4.2: run QEMU with `-cpu Nehalem` (or a KVM/real CPU). With `-cpu max` (AVX2) llvmpipe emits AVX2
+  gathers and the process dies in JIT code; `gathertest.c` shows QEMU's TCG returning zeros for an unmasked
+  `vpgatherdd`, while `avxtest.c` shows ReactOS preserves YMM state across preemption, so this is QEMU emulation, not
+  ReactOS (re-verify on real hardware).
+* llvmpipe's JIT needs all sections within 2 GiB of each other (COFF RIP-relative relocations): `patch-mesa.py`
+  switches to the Large code model and an arena memory manager.
+
 ## Next gates
 vkcube (win32 WSI), DXVK D3D11 sample, vkd3d-proton D3D12 sample, then radv on amdgpu (LinuxKPI).
