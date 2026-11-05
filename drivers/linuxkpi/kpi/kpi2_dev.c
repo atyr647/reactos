@@ -425,7 +425,15 @@ ssize_t simple_read_from_buffer(void __user *to, size_t count, loff_t *ppos, con
 	*ppos = pos + count;
 	return count;
 }
-int simple_pin_fs(struct file_system_type *type, struct vfsmount **mount, int *count) { return -ENODEV; }
+static struct super_block kpi_fake_sb;
+static struct vfsmount kpi_fake_mnt = { .mnt_sb = &kpi_fake_sb };
+int simple_pin_fs(struct file_system_type *type, struct vfsmount **mount, int *count)
+{
+	/* DRM only needs a superblock to hang its anonymous inode on */
+	*mount = &kpi_fake_mnt;
+	(*count)++;
+	return 0;
+}
 void simple_release_fs(struct vfsmount **mount, int *count) { }
 int single_open(struct file *file, int (*show)(struct seq_file *, void *), void *data) { return -ENOSYS; }
 int single_release(struct inode *inode, struct file *file) { return 0; }
@@ -441,9 +449,19 @@ void put_unused_fd(unsigned int fd) { }
 void fd_install(unsigned int fd, struct file *file) { }
 struct fd fdget(unsigned int fd) { struct fd f = { 0 }; return f; }
 void fput(struct file *file) { }
-void iput(struct inode *inode) { }
+void iput(struct inode *inode) { if (inode) kfree(inode); }
 struct file *anon_inode_getfile(const char *name, const struct file_operations *fops, void *priv, int flags) { return ERR_PTR(-ENOSYS); }
-struct inode *alloc_anon_inode(struct super_block *s) { return ERR_PTR(-ENOSYS); }
+struct inode *alloc_anon_inode(struct super_block *s)
+{
+	struct inode *inode = kzalloc(sizeof(*inode), GFP_KERNEL);
+
+	if (!inode)
+		return ERR_PTR(-ENOMEM);
+	inode->i_sb = s;
+	inode->i_mapping = &inode->i_data;
+	inode->i_data.host = inode;
+	return inode;
+}
 struct file *dentry_open(const struct path *path, int flags, const struct cred *cred) { return ERR_PTR(-ENOSYS); }
 int init_pseudo(struct fs_context *fc, unsigned long magic) { return -ENOSYS; }
 void kill_anon_super(struct super_block *sb) { }
@@ -469,3 +487,10 @@ int drm_get_panel_orientation_quirk(int width, int height) { return -1; }
 
 /* ---- page cache attribute bits: filled in properly by the memory layer (README: Still to do) ---- */
 unsigned long cachemode2protval(enum page_cache_mode pcm) { return 0; }
+
+/* ---- %pS symbol printing: no symbol table, print the address ---------------------------------- */
+int sprint_symbol(char *buffer, unsigned long address) { return scnprintf(buffer, 64, "0x%lx", address); }
+int sprint_symbol_no_offset(char *buffer, unsigned long address) { return scnprintf(buffer, 64, "0x%lx", address); }
+int sprint_symbol_build_id(char *buffer, unsigned long address) { return scnprintf(buffer, 64, "0x%lx", address); }
+int sprint_backtrace(char *buffer, unsigned long address) { return scnprintf(buffer, 64, "0x%lx", address); }
+int sprint_backtrace_build_id(char *buffer, unsigned long address) { return scnprintf(buffer, 64, "0x%lx", address); }
