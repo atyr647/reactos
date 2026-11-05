@@ -227,6 +227,14 @@ MmAccessFault(IN ULONG FaultCode,
     NTSTATUS Status;
     BOOLEAN IsArm3Fault = FALSE;
 
+    /* Bring-up aid: a fault above APC_LEVEL is fatal; say where it happened before the asserts fire */
+    if (KeGetCurrentIrql() > APC_LEVEL && Mode == KernelMode)
+    {
+        PKTRAP_FRAME Tf = (PKTRAP_FRAME)TrapInformation;
+        DPRINT1("Page fault at IRQL %u: address %p, rip %p, fault code %lx\n", (unsigned)KeGetCurrentIrql(), Address,
+                Tf ? (PVOID)Tf->Rip : NULL, FaultCode);
+    }
+
     /* Cute little hack for ROS */
     if ((ULONG_PTR)Address >= (ULONG_PTR)MmSystemRangeStart)
     {
