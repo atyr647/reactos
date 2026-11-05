@@ -100,7 +100,14 @@ char *kasprintf(gfp_t gfp, const char *fmt, ...)
 }
 
 /* ---- RCU / irq_work (uniprocessor stand-ins) ------------------------------------------------ */
-void call_rcu(struct rcu_head *head, rcu_callback_t func) { func(head); }
+void call_rcu(struct rcu_head *head, rcu_callback_t func)
+{
+	/* kfree_rcu() passes the offset of the rcu_head inside the object instead of a callback */
+	if ((unsigned long)func < 4096)
+		kvfree((void *)((char *)head - (unsigned long)func));
+	else
+		func(head);
+}
 void synchronize_rcu(void) { }
 bool irq_work_queue(struct irq_work *work) { atomic_set(&work->node.a_flags, 0); work->func(work); return true; }
 int wake_up_state(struct task_struct *p, unsigned int state) { return 0; }
