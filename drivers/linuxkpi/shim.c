@@ -337,8 +337,6 @@ const LKPI_EXPORT LkpiExports[] =
     { "nt_time_ms", (PVOID)nt_time_ms },
     { "nt_dbgprint", (PVOID)nt_dbgprint },
     { "nt_register_tick", (PVOID)nt_register_tick },
-    { "_printk", (PVOID)lx_printk },
-    { "printk", (PVOID)lx_printk },
 };
 
 const ULONG LkpiExportCount = RTL_NUMBER_OF(LkpiExports);
