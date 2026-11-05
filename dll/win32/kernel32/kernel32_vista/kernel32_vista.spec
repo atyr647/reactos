@@ -98,3 +98,5 @@
 @ stdcall PathCchAddBackslash(wstr long)
 @ stdcall PathCchRemoveFileSpec(wstr long)
 @ stdcall PathCchFindExtension(wstr long ptr)
+@ stdcall AddDllDirectory(wstr)
+@ stdcall RemoveDllDirectory(ptr)

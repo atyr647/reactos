@@ -506,6 +506,7 @@
 @ stdcall LockWorkStation() NtUserLockWorkStation
 @ stdcall -version=0x600+ LogicalToPhysicalPoint(long ptr)
 @ stdcall -stub -version=0x602+ LogicalToPhysicalPointForPerMonitorDPI(long ptr)
+@ stdcall -stub -version=0x602+ PhysicalToLogicalPointForPerMonitorDPI(long ptr)
 @ stdcall LookupIconIdFromDirectory(ptr long)
 @ stdcall LookupIconIdFromDirectoryEx(ptr long long long long)
 @ stdcall MBToWCSEx(long str long wstr long long)

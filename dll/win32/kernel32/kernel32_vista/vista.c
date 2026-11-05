@@ -843,3 +843,26 @@ INT WINAPI CompareStringOrdinal(const WCHAR *str1, INT len1, const WCHAR *str2, 
     if (ret > 0) return CSTR_GREATER_THAN;
     return CSTR_EQUAL;
 }
+
+/*
+ * Safe DLL search directories: the loader has no per-process user directory list yet, so these only
+ * hand out a non-NULL cookie and report success (callers use them to widen the LOAD_LIBRARY_SEARCH_* set).
+ */
+DLL_DIRECTORY_COOKIE
+WINAPI
+AddDllDirectory(PCWSTR NewDirectory)
+{
+    if (!NewDirectory)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return NULL;
+    }
+    return (DLL_DIRECTORY_COOKIE)(ULONG_PTR)1;
+}
+
+BOOL
+WINAPI
+RemoveDllDirectory(DLL_DIRECTORY_COOKIE Cookie)
+{
+    return Cookie != NULL;
+}
