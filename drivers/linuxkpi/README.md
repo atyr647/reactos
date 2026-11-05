@@ -123,3 +123,24 @@ dma-buf import/export, shmem, cache attributes (WC/UC) for system pages.
    fail: INTx not routed (needs MSI support in the HAL), firmware names, ACPI/BIOS (VBIOS fetch), `pci_resize_resource`.
 3. Even if the driver initializes the card there is no user-mode path yet: the ioctl device and libdrm shim for Mesa
    radv (see WDDM-BRIDGE.md, "C. One kernel ABI, two backends").
+
+## Milestone: user mode talks to a Linux DRM driver through `\\.\LKPIDRM0`
+`drmdev.c` creates `\Device\LKPIDRM0` (primary node, minor 0) and `\Device\LKPIDRM128` (render node) with DOS links
+`\\.\LKPIDRM0` / `\\.\LKPIDRM128`. `CreateFile` -> `drm_open()`, `DeviceIoControl(IOCTL_LKPI_DRM)` (envelope in
+`lkpi_drm.h`: Linux ioctl number + argument bytes in, result + argument bytes out) -> the driver's `unlocked_ioctl`,
+`CloseHandle` -> `drm_release()`. The Linux side (`kpi/kpi2_drm.c`) builds the `struct inode`/`struct file` that
+`drm_open()` expects; arguments are kernel copies, nested user pointers (e.g. `drm_version.name`) are written directly
+because the IRP runs in the caller's context (no fault recovery yet: a bad user pointer crashes the kernel).
+
+`tools/vulkan/drmtest.c` (QEMU, bochs driver) gets:
+
+    DRM_IOCTL_VERSION    -> 1.0.0 'bochs-drm' 'bochs dispi vga interface (qemu stdvga)'
+    GET_CAP(DUMB_BUFFER) -> 1
+    MODE_GETRESOURCES    -> 1 crtc, 1 connector, 1 encoder, 8192x8192
+    GETCONNECTOR 32      -> 15 modes, connected
+    CREATE_DUMB 800x600x32 -> handle 1, pitch 3200, size 1921024
+    MAP_DUMB             -> offset 0x100000000
+
+Still missing for user-mode graphics: `mmap` of GEM objects into the caller (map the BO's pages/VRAM with an MDL in
+`IRP_MJ_DEVICE_CONTROL`, or a dedicated `IOCTL_LKPI_DRM_MMAP`), fault recovery for user pointers (`__put_user`/
+`copy_to_user` exception fixups), a `libdrm` shim (`drmOpen`, `drmIoctl`, `drmMap`, ...) and a Mesa winsys for it.
