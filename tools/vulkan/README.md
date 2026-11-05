@@ -56,9 +56,11 @@ succeed on lavapipe and the window shows the animated clear colour. vkd3d-proton
 
 * Open: with `-cpu Nehalem` Godot 4.7.2 (mobile renderer, 400x300) gets as far as drawing, then llvmpipe-generated
   code calls a NULL function pointer (`UM-AV ... rip 0`, return address inside the JIT arena; the kernel log shows
-  registers and a stack dump). `EnumProcessModulesEx` is implemented now but is not the cause. Next step: log
-  unresolved/NULL symbols in the arena memory manager (`getSymbolAddress`) and capture the shader that triggers it
-  (`LP_DEBUG`/`GALLIVM_DEBUG`).
+  registers and a stack dump). `EnumProcessModulesEx` is implemented now but is not the cause. The JIT arena logs no unresolved
+  symbols; the crashing instruction is `call r15` (`41 ff d7`) with r15 = 0 in generated SSSE3 code (pshufb), i.e. an
+  indirect call through a NULL function pointer, most likely a texture-sampler function pointer that llvmpipe never
+  filled in. Next: reproduce with a small textured D3D11/Vulkan test on `-cpu Nehalem` to tell a lavapipe/llvmpipe
+  issue from a Godot-specific one, then log sampler function creation in llvmpipe.
 
 ## Next gates
 vkcube (win32 WSI), DXVK D3D11 sample, vkd3d-proton D3D12 sample, then radv on amdgpu (LinuxKPI).
