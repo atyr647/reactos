@@ -7,5 +7,5 @@ KLIB="bitmap ctype find_bit hexdump hweight idr kstrtox list_sort llist plist ra
 for f in $KLIB; do rm -f "$OUT/$f.c"; cp "$SRC/lib/$f.c" "$OUT/$f.c"; done
 # boot-time initcalls and early params would define init_module a second time: drop them
 sed -i -E '/^(early_initcall|core_initcall|subsys_initcall|late_initcall|device_initcall|fs_initcall|arch_initcall|postcore_initcall)\(/d; /^early_param\(/d' "$OUT"/*.c
-make -C "$SRC" -j"$(nproc)" -k KBUILD_MODPOST_WARN=1 KCFLAGS="-mcmodel=small -fPIC" "KLIB_SRCS=$(for f in $KLIB; do echo -n "$f.c "; done)" modules M="$OUT"
+make -C "$SRC" -j"$(nproc)" -k KBUILD_MODPOST_WARN=1 KCFLAGS="-mcmodel=small -fPIC -mpreferred-stack-boundary=4" "KLIB_SRCS=$(for f in $KLIB; do echo -n "$f.c "; done)" modules M="$OUT"
 ls -la "$OUT"/kpi.ko

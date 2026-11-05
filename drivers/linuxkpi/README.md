@@ -14,13 +14,16 @@ Goal: run Linux's own GPU drivers (first `bochs` in QEMU, then `amdgpu`) on Reac
 Linux builds modules with `-mcmodel=kernel`, which needs them in the top 2 GB of the address space.
 NT's kernel addresses are not there, so modules must be position independent:
 
-    make KCFLAGS="-mcmodel=small -fPIC" ...        # no -fno-plt (breaks some inline asm)
+    make KCFLAGS="-mcmodel=small -fPIC -mpreferred-stack-boundary=4" ...   # no -fno-plt (breaks some inline asm)
 
 and the tree needs these config/source changes (all build-time, no driver code touched):
 * `CONFIG_JUMP_LABEL=n` (static keys use `asm goto` with address immediates, rejected under -fPIC)
 * `arch/x86/include/asm/cpufeature.h`: `#define static_cpu_has(bit) boot_cpu_has(bit)`
 * `arch/x86/include/asm/page_64.h`: `clear_page()` -> plain memset (no `alternative_call`)
 * build with `KBUILD_MODPOST_WARN=1` (no vmlinux to check symbols against)
+
+Linux keeps the stack 8-byte aligned (`-mpreferred-stack-boundary=3`); the host shim is compiled for 16-byte alignment
+(it calls NT functions that use `movaps`), so modules are built with 16-byte alignment too.
 
 Relocation types seen: PC32, PLT32, GOTPCREL(X), REX_GOTPCRELX, 64, 32 (all supported).
 
