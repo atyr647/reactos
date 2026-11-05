@@ -338,7 +338,10 @@ typedef struct _LKPI_IRQ
 static VOID NTAPI LkpiIrqDpc(PKDPC Dpc, PVOID Ctx, PVOID A1, PVOID A2)
 {
     LKPI_IRQ *Q = Ctx;
-    if (InterlockedExchange8((volatile CHAR *)&Q->ThreadPending, 0) && Q->Thread) Q->Thread(Q->Irq, Q->Dev);
+    BOOLEAN Pending = Q->ThreadPending;
+
+    Q->ThreadPending = FALSE;
+    if (Pending && Q->Thread) Q->Thread(Q->Irq, Q->Dev);
 }
 
 static BOOLEAN NTAPI LkpiIsr(PKINTERRUPT Interrupt, PVOID Ctx)
@@ -406,7 +409,10 @@ void * LX_ABI nt_read_firmware(const char *Name, lx_ulong *Size)
     NTSTATUS Status;
     ULONG i, n;
 
-    n = RtlStringCbPrintfW(Path, sizeof(Path), L"\\SystemRoot\\system32\\firmware\\") == STATUS_SUCCESS ? (ULONG)wcslen(Path) : 0;
+    static const WCHAR Prefix[] = L"\\SystemRoot\\system32\\firmware\\";
+
+    RtlCopyMemory(Path, Prefix, sizeof(Prefix));
+    n = RTL_NUMBER_OF(Prefix) - 1;
     for (i = 0; Name[i] && n < RTL_NUMBER_OF(Path) - 1; i++) Path[n++] = Name[i] == '/' ? L'\\' : (WCHAR)Name[i];
     Path[n] = 0;
     RtlInitUnicodeString(&Us, Path);
