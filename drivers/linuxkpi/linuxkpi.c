@@ -32,6 +32,7 @@ DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
     ULONG i;
 
     DbgPrint("LKPI: Linux kernel module host starting (%u modules)\n", (ULONG)LKPI_MODULE_COUNT);
+    LkpiInitAllocator();
     DriverObject->DriverUnload = LkpiUnload;
 
     for (i = 0; i < LKPI_MODULE_COUNT && i < LKPI_MAX_MODULES; i++)

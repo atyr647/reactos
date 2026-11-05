@@ -81,32 +81,104 @@ lx_printk(const char *Fmt, lx_ulong a1, lx_ulong a2, lx_ulong a3, lx_ulong a4, l
 
 /* ---- bridge for the Linux-compiled core module (kpi.ko) ----------------------------------- */
 
-/* Allocations carry a 16-byte header with their size so ksize()/krealloc() work. */
-typedef struct _LKPI_BLOCK { lx_ulong Size; lx_ulong Magic; } LKPI_BLOCK;
-#define LKPI_BLOCK_MAGIC 0x4C4B5049424C4B31ULL
+/*
+ * Allocator. Linux code allocates at any IRQL (GFP_ATOMIC under spinlocks); ReactOS's NonPagedPool cannot
+ * expand at DISPATCH_LEVEL, so small blocks come from a pre-allocated arena with per-size-class free lists.
+ * Every block has a 16-byte header: [0] requested size, [8] magic | class (0xFF = pool allocation).
+ */
+typedef struct _LKPI_BLOCK { lx_ulong Size; lx_ulong Tag; } LKPI_BLOCK;
+#define LKPI_BLOCK_MAGIC 0x4C4B504900000000ULL
+#define LKPI_NUM_CLASSES 12            /* 32 .. 64 KiB payload */
+#define LKPI_ARENA_MB    48
+
+static PUCHAR LkpiArena, LkpiArenaPtr, LkpiArenaEnd;
+static LKPI_BLOCK *LkpiFree[LKPI_NUM_CLASSES];
+static KSPIN_LOCK LkpiAllocLock;
+
+VOID LkpiInitAllocator(VOID)
+{
+    SIZE_T Size = (SIZE_T)LKPI_ARENA_MB << 20;
+
+    KeInitializeSpinLock(&LkpiAllocLock);
+    while (!LkpiArena && Size >= (4 << 20))
+    {
+        LkpiArena = ExAllocatePoolWithTag(NonPagedPool, Size, LKPI_TAG);
+        if (!LkpiArena) Size >>= 1;
+    }
+    LkpiArenaPtr = LkpiArena;
+    LkpiArenaEnd = LkpiArena ? LkpiArena + Size : NULL;
+    DbgPrint("LKPI: allocator arena %lu KiB at %p\n", (ULONG)(Size >> 10), LkpiArena);
+}
+
+static ULONG LkpiClassOf(lx_ulong Size, lx_ulong *Payload)
+{
+    ULONG c = 0;
+    lx_ulong p = 32;
+
+    while (p < Size && c < LKPI_NUM_CLASSES) { p <<= 1; c++; }
+    *Payload = p;
+    return c;
+}
 
 void * LX_ABI nt_alloc(lx_ulong Size, int Zero)
 {
-    LKPI_BLOCK *b = ExAllocatePoolWithTag(NonPagedPool, (SIZE_T)(Size ? Size : 1) + sizeof(LKPI_BLOCK), LKPI_TAG);
-    if (!b) return NULL;
+    LKPI_BLOCK *b = NULL;
+    lx_ulong Payload;
+    ULONG c = LkpiClassOf(Size ? Size : 1, &Payload);
+    KIRQL Old;
+
+    if (c < LKPI_NUM_CLASSES)
+    {
+        KeAcquireSpinLock(&LkpiAllocLock, &Old);
+        if (LkpiFree[c])
+        {
+            b = LkpiFree[c];
+            LkpiFree[c] = *(LKPI_BLOCK **)(b + 1);
+        }
+        else if (LkpiArenaPtr && LkpiArenaPtr + sizeof(LKPI_BLOCK) + Payload <= LkpiArenaEnd)
+        {
+            b = (LKPI_BLOCK *)LkpiArenaPtr;
+            LkpiArenaPtr += sizeof(LKPI_BLOCK) + Payload;
+        }
+        KeReleaseSpinLock(&LkpiAllocLock, Old);
+        if (b) b->Tag = LKPI_BLOCK_MAGIC | c;
+    }
+    if (!b)
+    {
+        /* large or arena exhausted: general pool (only valid at <= DISPATCH, and may fail when expanding there) */
+        b = ExAllocatePoolWithTag(NonPagedPool, (SIZE_T)Size + sizeof(LKPI_BLOCK), LKPI_TAG);
+        if (!b) return NULL;
+        b->Tag = LKPI_BLOCK_MAGIC | 0xFF;
+    }
     b->Size = Size;
-    b->Magic = LKPI_BLOCK_MAGIC;
     if (Zero) RtlZeroMemory(b + 1, (SIZE_T)Size);
     return b + 1;
 }
 
 void LX_ABI nt_free(void *p)
 {
-    LKPI_BLOCK * b;
+    LKPI_BLOCK *b;
+    KIRQL Old;
+    ULONG c;
+
     if (!p) return;
     b = (LKPI_BLOCK *)p - 1;
-    if (b->Magic != LKPI_BLOCK_MAGIC)
+    if ((b->Tag & 0xFFFFFFFF00000000ULL) != LKPI_BLOCK_MAGIC)
     {
         DbgPrint("LKPI: kfree of a pointer not from nt_alloc: %p\n", p);
         return;
     }
-    b->Magic = 0;
-    ExFreePoolWithTag(b, LKPI_TAG);
+    c = (ULONG)(b->Tag & 0xFF);
+    if (c == 0xFF)
+    {
+        b->Tag = 0;
+        ExFreePoolWithTag(b, LKPI_TAG);
+        return;
+    }
+    KeAcquireSpinLock(&LkpiAllocLock, &Old);
+    *(LKPI_BLOCK **)(b + 1) = LkpiFree[c];
+    LkpiFree[c] = b;
+    KeReleaseSpinLock(&LkpiAllocLock, Old);
 }
 
 lx_ulong LX_ABI nt_alloc_size(void *p)
@@ -114,7 +186,7 @@ lx_ulong LX_ABI nt_alloc_size(void *p)
     LKPI_BLOCK * b;
     if (!p) return 0;
     b = (LKPI_BLOCK *)p - 1;
-    return b->Magic == LKPI_BLOCK_MAGIC ? b->Size : 0;
+    return (b->Tag & 0xFFFFFFFF00000000ULL) == LKPI_BLOCK_MAGIC ? b->Size : 0;
 }
 
 /* Kernel threads for workqueues and timers: fn(arg) runs on a system thread until it returns. */
