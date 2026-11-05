@@ -33,7 +33,7 @@ int main(void)
     struct drm_version v = { 0 };
     struct drm_get_cap cap = { 1, 0 };
     struct drm_card_res res = { 0 };
-    uint32_t crtcs[8] = { 0 }, conns[8] = { 0 };
+    uint32_t crtcs[8] = { 0 }, conns[8] = { 0 }, encs[8] = { 0 }, fbs[8] = { 0 };
     long r;
     unsigned i;
 
@@ -49,7 +49,7 @@ int main(void)
     r = drm_ioctl(0xC010640C, &cap, sizeof cap);
     L("DRMTEST: GET_CAP(DUMB_BUFFER) -> %ld value %llu", r, (unsigned long long)cap.value);
 
-    res.crtc_ids = (uint64_t)(uintptr_t)crtcs; res.conn_ids = (uint64_t)(uintptr_t)conns;
+    res.crtc_ids = (uint64_t)(uintptr_t)crtcs; res.conn_ids = (uint64_t)(uintptr_t)conns; res.enc_ids = (uint64_t)(uintptr_t)encs; res.fb_ids = (uint64_t)(uintptr_t)fbs;
     r = drm_ioctl(0xC04064A0, &res, sizeof res);           /* first call: counts only */
     L("DRMTEST: MODE_GETRESOURCES -> %ld crtcs %u connectors %u encoders %u fbs %u size %u..%ux%u..%u", r, res.n_crtcs, res.n_conns, res.n_encs, res.n_fbs, res.min_w, res.max_w, res.min_h, res.max_h);
     if (res.n_crtcs > 8) res.n_crtcs = 8;
@@ -69,6 +69,15 @@ int main(void)
             r = drm_ioctl(0xC05064A7, &c, sizeof c);
             L("DRMTEST: first mode %s %ux%u @%u", modes[0].name, modes[0].hdisplay, modes[0].vdisplay, modes[0].vrefresh);
         }
+    }
+    {
+        struct { uint32_t height, width, bpp, flags, handle, pitch; uint64_t size; } cd = { 600, 800, 32, 0, 0, 0, 0 };
+        struct { uint32_t handle, pad; uint64_t offset; } md = { 0 };
+        r = drm_ioctl(0xC02064B2, &cd, sizeof cd);
+        L("DRMTEST: CREATE_DUMB 800x600x32 -> %ld handle %u pitch %u size %llu", r, cd.handle, cd.pitch, (unsigned long long)cd.size);
+        md.handle = cd.handle;
+        r = drm_ioctl(0xC01064B3, &md, sizeof md);
+        L("DRMTEST: MAP_DUMB -> %ld offset %llx", r, (unsigned long long)md.offset);
     }
     L("DRMTEST: DONE");
     CloseHandle(dev);
