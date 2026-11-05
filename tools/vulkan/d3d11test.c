@@ -84,6 +84,8 @@ int main(int argc, char **argv)
     {
         static const char vs_src[] = "float4 main(uint id : SV_VertexID) : SV_Position { float2 p[3] = { float2(0.0, 0.7), float2(0.7, -0.7), float2(-0.7, -0.7) }; return float4(p[id], 0.0, 1.0); }";
         static const char ps_src[] = "float4 main(float4 p : SV_Position) : SV_Target { return float4(p.x / 400.0, p.y / 300.0, 1.0 - p.x / 400.0, 1.0); }";
+        static const char ps_tex[] = "Texture2D t : register(t0); SamplerState s : register(s0); float4 main(float4 p : SV_Position) : SV_Target { return t.Sample(s, p.xy / float2(400.0, 300.0) * 4.0); }";
+        int tex = getenv("TEX") != NULL;
         HMODULE comp = LoadLibraryA("d3dcompiler_47.dll");
         HRESULT (WINAPI *dc)(const void *, SIZE_T, const char *, const void *, void *, const char *, const char *, UINT, UINT, ID3DBlob **, ID3DBlob **);
         ID3DBlob *vsb = NULL, *psb = NULL, *err = NULL;
@@ -93,7 +95,7 @@ int main(int argc, char **argv)
         {
             HRESULT r1 = dc(vs_src, sizeof vs_src - 1, "vs", NULL, NULL, "main", "vs_4_0", 0, 0, &vsb, &err);
             if (FAILED(r1) && err) L("D3D11T: vs compile: %s", (char *)ID3D10Blob_GetBufferPointer(err));
-            HRESULT r2 = dc(ps_src, sizeof ps_src - 1, "ps", NULL, NULL, "main", "ps_4_0", 0, 0, &psb, &err);
+            HRESULT r2 = dc(tex ? ps_tex : ps_src, tex ? sizeof ps_tex - 1 : sizeof ps_src - 1, "ps", NULL, NULL, "main", "ps_4_0", 0, 0, &psb, &err);
             if (FAILED(r2) && err) L("D3D11T: ps compile: %s", (char *)ID3D10Blob_GetBufferPointer(err));
             L("D3D11T: D3DCompile vs %08lx ps %08lx", r1, r2);
             if (SUCCEEDED(r1) && SUCCEEDED(r2))
@@ -102,6 +104,20 @@ int main(int argc, char **argv)
                 HRESULT b = ID3D11Device_CreatePixelShader(dev, ID3D10Blob_GetBufferPointer(psb), ID3D10Blob_GetBufferSize(psb), NULL, &ps);
                 L("D3D11T: CreateVertexShader %08lx CreatePixelShader %08lx", a, b);
                 use_tri = SUCCEEDED(a) && SUCCEEDED(b);
+                if (tex)
+                {
+                    UINT px[16 * 16]; int x, y;
+                    D3D11_TEXTURE2D_DESC td = { 16, 16, 1, 1, DXGI_FORMAT_R8G8B8A8_UNORM, { 1, 0 }, D3D11_USAGE_DEFAULT, D3D11_BIND_SHADER_RESOURCE };
+                    D3D11_SUBRESOURCE_DATA sr = { px, 16 * 4, 0 };
+                    D3D11_SAMPLER_DESC smd = { D3D11_FILTER_MIN_MAG_MIP_LINEAR, D3D11_TEXTURE_ADDRESS_WRAP, D3D11_TEXTURE_ADDRESS_WRAP, D3D11_TEXTURE_ADDRESS_WRAP, 0, 1, D3D11_COMPARISON_NEVER, { 0, 0, 0, 0 }, 0, D3D11_FLOAT32_MAX };
+                    ID3D11Texture2D *t2 = NULL; ID3D11ShaderResourceView *srv = NULL; ID3D11SamplerState *ss = NULL;
+                    for (y = 0; y < 16; y++) for (x = 0; x < 16; x++) px[y * 16 + x] = ((x ^ y) & 4) ? 0xFF20A0FFu : 0xFFFFC020u;
+                    L("D3D11T: CreateTexture2D %08lx", ID3D11Device_CreateTexture2D(dev, &td, &sr, &t2));
+                    L("D3D11T: CreateSRV %08lx", ID3D11Device_CreateShaderResourceView(dev, (ID3D11Resource *)t2, NULL, &srv));
+                    L("D3D11T: CreateSampler %08lx", ID3D11Device_CreateSamplerState(dev, &smd, &ss));
+                    ID3D11DeviceContext_PSSetShaderResources(ctx, 0, 1, &srv);
+                    ID3D11DeviceContext_PSSetSamplers(ctx, 0, 1, &ss);
+                }
             }
         }
     }
