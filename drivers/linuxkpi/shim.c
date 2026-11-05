@@ -148,12 +148,15 @@ int LX_ABI nt_thread_spawn(void (LX_ABI *Fn)(void *), void *Arg)
 }
 
 
+#define LKPI_CHECK_IRQL(fn) do { if (KeGetCurrentIrql() > APC_LEVEL) DbgPrint("LKPI: " fn " called at IRQL %u\n", (unsigned)KeGetCurrentIrql()); } while (0)
+
 /* ---- memory bridge for the Linux page layer (kpi2_mm.c) ---------------------------------------- */
 
 /* One physically contiguous region that backs all Linux "system memory" (alloc_pages, dma_alloc_*).
  * Linux's direct map then is simply va = pa + (va0 - pa0). Returns the kernel VA, fills *Phys. */
 void * LX_ABI nt_contig_alloc(lx_ulong Size, lx_ulong *Phys)
 {
+    LKPI_CHECK_IRQL("nt_contig_alloc");
     PHYSICAL_ADDRESS Low, High, Bound, Pa;
     PVOID Va;
 
@@ -173,6 +176,7 @@ void LX_ABI nt_contig_free(void *Va, lx_ulong Size)
 
 void * LX_ABI nt_ioremap(lx_ulong Phys, lx_ulong Size, int Cache)
 {
+    LKPI_CHECK_IRQL("nt_ioremap");
     PHYSICAL_ADDRESS Pa;
     Pa.QuadPart = (LONGLONG)Phys;
     return MmMapIoSpace(Pa, (SIZE_T)Size, Cache == 2 ? MmWriteCombined : (Cache == 1 ? MmCached : MmNonCached));
@@ -183,6 +187,7 @@ void LX_ABI nt_iounmap(void *Va, lx_ulong Size) { MmUnmapIoSpace(Va, (SIZE_T)Siz
 /* Map an arbitrary list of physical page frames into one contiguous kernel VA range (vmap). */
 void * LX_ABI nt_map_pfns(const lx_ulong *Pfns, ULONG Count, int Cache, void **MdlOut)
 {
+    LKPI_CHECK_IRQL("nt_map_pfns");
     PMDL Mdl = IoAllocateMdl(NULL, Count * PAGE_SIZE, FALSE, FALSE, NULL);
     PPFN_NUMBER Arr;
     PVOID Va;
@@ -210,6 +215,7 @@ void LX_ABI nt_unmap_pfns(void *Va, void *MdlPtr)
 
 lx_ulong LX_ABI nt_virt_to_phys(void *Va)
 {
+    LKPI_CHECK_IRQL("nt_virt_to_phys");
     return (lx_ulong)MmGetPhysicalAddress(Va).QuadPart;
 }
 
