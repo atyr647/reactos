@@ -1,0 +1,86 @@
+name: x64 live ISO
+
+# Builds a Release amd64 ReactOS live/boot ISO (Windows-10 export level, 0xA00,
+# as used by the Vulkan / DXVK / vkd3d work) and publishes it as a downloadable
+# workflow artifact.  Run it from the Actions tab ("Run workflow") or push a tag
+# named x64-live-* to also attach the ISO to a GitHub release.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dllver:
+        description: 'DLL_EXPORT_VERSION (0xA00 = Windows 10 level, 0x502 = Server 2003)'
+        default: '0xA00'
+  push:
+    tags: ['x64-live-*']
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    env:
+      DLLVER: ${{ github.event.inputs.dllver || '0xA00' }}
+    steps:
+    - name: Get RosBE build specifics
+      id: get_rosbe_spec
+      run: |
+        echo march-sha=$(gcc -march=native -Q --help=target | sha1sum | awk '{print $1}') >> $GITHUB_OUTPUT
+        echo git-sha=$(git ls-remote https://github.com/zefklop/RosBE.git | grep unix_amd64 | awk '{print $1}') >> $GITHUB_OUTPUT
+        wget https://gist.githubusercontent.com/zefklop/b2d6a0b470c70183e93d5285a03f5899/raw/build_rosbe_ci.sh
+        sed -i '/gcc-8.4.0\/gcc-8.4.0.tar.xz/c\wget https://ftpmirror.gnu.org/gcc/gcc-8.4.0/gcc-8.4.0.tar.xz || wget -L https://web.archive.org/web/2025if_/https://ftpmirror.gnu.org/gcc/gcc-8.4.0/gcc-8.4.0.tar.xz' ./build_rosbe_ci.sh
+        sed -i '/mingw-w64-v6.0.0.tar.bz2\/download/c\wget -O mingw-w64-v6.0.0.tar.bz2 https://sourceforge.net/projects/mingw-w64/files/mingw-w64/mingw-w64-release/mingw-w64-v6.0.0.tar.bz2/download && bzip2 -t mingw-w64-v6.0.0.tar.bz2 || (wget -O - https://github.com/mingw-w64/mingw-w64/archive/refs/tags/v6.0.0.tar.gz | tar -xz && mv mingw-w64-6.0.0 mingw-w64-v6.0.0 && tar -cjf mingw-w64-v6.0.0.tar.bz2 mingw-w64-v6.0.0 && rm -rf mingw-w64-v6.0.0)' ./build_rosbe_ci.sh
+    - name: Get RosBE
+      id: get_rosbe
+      uses: actions/cache@v5
+      with:
+        path: RosBE-CI
+        key: RosBE-CI-${{runner.os}}-${{steps.get_rosbe_spec.outputs.march-sha}}-${{steps.get_rosbe_spec.outputs.git-sha}}-${{hashfiles('./build_rosbe_ci.sh')}}
+    - name: Compile RosBE
+      if: ${{ steps.get_rosbe.outputs.cache-hit != 'true' }}
+      run: |
+        chmod +x build_rosbe_ci.sh
+        ./build_rosbe_ci.sh ${{github.workspace}}/RosBE-CI
+        test -x ${{github.workspace}}/RosBE-CI/RosBE.sh || { echo "::error::RosBE build failed"; exit 1; }
+    - name: Install ccache
+      run: sudo apt install ccache
+    - name: Source checkout
+      uses: actions/checkout@v6
+      with:
+        path: src
+    - name: Set up cache for ccache
+      uses: actions/cache@v5
+      with:
+        path: ccache
+        key: ccache-live-iso-${{github.sha}}
+        restore-keys: ccache-live-iso-
+    - name: Set ccache settings
+      run: |
+        echo "CCACHE_BASEDIR=${{github.workspace}}" >> $GITHUB_ENV
+        echo "CCACHE_DIR=${{github.workspace}}/ccache" >> $GITHUB_ENV
+        echo "CCACHE_MAXSIZE=1G" >> $GITHUB_ENV
+        echo "CCACHE_SLOPPINESS=time_macros" >> $GITHUB_ENV
+        echo "CCACHE_COMPILERCHECK=string:${{steps.get_rosbe_spec.outputs.git-sha}}-${{hashfiles('./build_rosbe_ci.sh')}}" >> $GITHUB_ENV
+    - name: Configure
+      run: echo 'cmake -S ${{github.workspace}}/src -B ${{github.workspace}}/build -G Ninja -DCMAKE_TOOLCHAIN_FILE:FILEPATH=toolchain-gcc.cmake -DARCH:STRING=amd64 -DCMAKE_BUILD_TYPE=Release -DDLL_EXPORT_VERSION=${{env.DLLVER}} -DENABLE_CCACHE=1' | ${{github.workspace}}/RosBE-CI/RosBE.sh . 0 amd64
+    - name: Build and generate ISO
+      run: set -o pipefail && echo 'cmake --build ${{github.workspace}}/build --target bootcd' | ${{github.workspace}}/RosBE-CI/RosBE.sh . 0 amd64
+    - name: Checksum
+      run: |
+        cd build
+        mv bootcd.iso reactos-x64-live-release.iso
+        sha256sum reactos-x64-live-release.iso | tee reactos-x64-live-release.iso.sha256
+    - name: Upload ISO artifact
+      uses: actions/upload-artifact@v7
+      with:
+        name: reactos-x64-live-release-${{github.sha}}
+        path: |
+          build/reactos-x64-live-release.iso
+          build/reactos-x64-live-release.iso.sha256
+    - name: Attach to release (tags only)
+      if: startsWith(github.ref, 'refs/tags/x64-live-')
+      uses: softprops/action-gh-release@v2
+      with:
+        files: |
+          build/reactos-x64-live-release.iso
+          build/reactos-x64-live-release.iso.sha256
