@@ -7,6 +7,7 @@
 
 #define NDEBUG
 #include <debug.h>
+int __cdecl _snprintf(char *, size_t, const char *, ...);
 
 #pragma pack(push, 1)
 typedef struct { UCHAR e_ident[16]; USHORT e_type, e_machine; ULONG e_version; ULONG64 e_entry, e_phoff, e_shoff; ULONG e_flags; USHORT e_ehsize, e_phentsize, e_phnum, e_shentsize, e_shnum, e_shstrndx; } ELF64_EHDR;
@@ -87,6 +88,30 @@ PVOID
 LkpiLookupModuleSymbol(const char *Name)
 {
     return LkpiFindExport(Name);
+}
+
+/* Reverse lookup: "name+0xoff" for an address inside a loaded module (debug aid). */
+BOOLEAN
+LkpiSymbolize(ULONG64 Addr, char *Buf, ULONG Len)
+{
+    PLKPI_MODULE M;
+    ULONG idx = 0;
+
+    for (M = LkpiLoaded; M; M = M->Next, idx++)
+    {
+        ULONG k;
+        for (k = 1; k < M->NumSyms; k++)
+        {
+            ELF64_SYM *S = &M->Syms[k];
+            if (S->st_shndx == SHN_UNDEF || (S->st_info & 0xf) != 2 || !S->st_size) continue;
+            if (Addr >= M->SymAddr[k] && Addr < M->SymAddr[k] + S->st_size)
+            {
+                _snprintf(Buf, Len, "%s+0x%I64x", M->StrTab + S->st_name, Addr - M->SymAddr[k]);
+                return TRUE;
+            }
+        }
+    }
+    return FALSE;
 }
 
 static NTSTATUS

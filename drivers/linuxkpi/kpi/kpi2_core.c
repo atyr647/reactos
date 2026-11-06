@@ -211,6 +211,8 @@ struct workqueue_struct {
 	char name[32];
 };
 
+extern void nt_log_addr(const char *tag, void *addr);
+int kpi_wq_trace = 0;
 static struct workqueue_struct kpi_system_wq, kpi_unbound_wq, kpi_long_wq;
 struct workqueue_struct *system_wq = &kpi_system_wq;
 struct workqueue_struct *system_unbound_wq = &kpi_unbound_wq;
@@ -237,6 +239,7 @@ static void kpi_wq_thread(void *arg)
 		}
 		spin_unlock_irqrestore(&wq->lock, flags);
 		if (w) {
+			if (kpi_wq_trace) nt_log_addr(wq->name, w->func);
 			w->func(w);
 			wq->current_work = NULL;
 		} else {
@@ -396,6 +399,7 @@ void destroy_workqueue(struct workqueue_struct *wq)
 struct work_struct *current_work(void) { return system_wq->current_work; }
 
 extern int kpi_mm_init(void);
+extern void kpi3_init_wqs(void);
 
 static int __init kpi2_init(void)
 {
@@ -404,6 +408,7 @@ static int __init kpi2_init(void)
 	if (ret)
 		return ret;
 	kpi_system_wqs_init();
+	kpi3_init_wqs();
 	return 0;
 }
 

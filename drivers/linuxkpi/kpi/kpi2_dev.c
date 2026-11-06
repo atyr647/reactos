@@ -285,7 +285,7 @@ void devres_add(struct device *dev, void *res)
 	list_add_tail(&dr->entry, &dev->devres_head);
 }
 void devres_free(void *res) { if (res) kfree(container_of(res, struct kpi_devres, data)); }
-static void kpi_devres_release_all(struct device *dev)
+void kpi_devres_release_all(struct device *dev)
 {
 	while (!list_empty(&dev->devres_head)) {
 		struct kpi_devres *dr = list_last_entry(&dev->devres_head, struct kpi_devres, entry);
@@ -344,8 +344,7 @@ int dev_set_name(struct device *dev, const char *fmt, ...)
 	va_end(ap);
 	return dev->kobj.name ? 0 : -ENOMEM;
 }
-int device_add(struct device *dev) { return 0; }
-void device_del(struct device *dev) { kpi_devres_release_all(dev); }
+/* device_add()/device_del() live in kpi3_drv.c (driver core) */
 int device_register(struct device *dev) { device_initialize(dev); return device_add(dev); }
 void device_unregister(struct device *dev) { device_del(dev); put_device(dev); }
 struct device *get_device(struct device *dev) { if (dev) kref_get(&dev->kobj.kref); return dev; }

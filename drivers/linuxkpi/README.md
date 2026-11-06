@@ -144,3 +144,25 @@ because the IRP runs in the caller's context (no fault recovery yet: a bad user 
 Still missing for user-mode graphics: `mmap` of GEM objects into the caller (map the BO's pages/VRAM with an MDL in
 `IRP_MJ_DEVICE_CONTROL`, or a dedicated `IOCTL_LKPI_DRM_MMAP`), fault recovery for user pointers (`__put_user`/
 `copy_to_user` exception fixups), a `libdrm` shim (`drmOpen`, `drmIoctl`, `drmMap`, ...) and a Mesa winsys for it.
+
+## Milestone: Linux USB stack (xHCI + usbcore + HID) running
+
+Unmodified Linux 6.12 `usb-common`, `usbcore`, `xhci-hcd`, `xhci-pci`, `hid`, `usbhid`, `hid-generic` load on
+top of `kpi`+`kpi2` (which now contains `kpi3_drv.c`: a real driver core with bus/driver matching and
+probing, notifier chains, kfifo/genalloc, dma pools, a minimal input core, many sysfs/PM/ACPI stubs).
+Measured in QEMU q35 (`-device qemu-xhci`): controller probe, both root hubs (HS + SS) enumerate, a hot-plugged
+`usb-kbd` is addressed, its descriptors read, `usbhid` binds and key presses arrive as `input_event()`s.
+
+Bugs found on the way (each would also break real hardware):
+* BH work (URB completions) shared the single `events` worker with `hub_init_func2` and deadlocked: BH queues now
+  have their own workers.
+* `spin_lock_irqsave` did not mask interrupts: the xHCI ISR spun forever on the CPU it interrupted. The `_irq`
+  variants now `cli`/`sti`.
+* `dma_map_*` of `kmalloc` memory used direct-map arithmetic, but the arena is outside the direct map; it now
+  resolves the physical address through the memory manager (`kpi_page_phys`). Limitation: single-page buffers.
+
+Debug aids added: `LkpiSymbolize()` (address -> `name+off` for loaded modules), `nt_log_addr`, workqueue
+tracing (`kpi_wq_trace`), stuck-wait tracer in `wait_for_completion`/`mutex_lock`.
+
+Not done yet: forwarding `input_event` to ReactOS keyboard/mouse (kbdclass/mouclass), mass storage, hub hotplug
+removal, MSI (legacy INTx only), USB suspend.

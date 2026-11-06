@@ -295,9 +295,25 @@ void dma_free_attrs(struct device *dev, size_t size, void *cpu_addr, dma_addr_t 
 {
 	free_pages((unsigned long)cpu_addr, get_order(size));
 }
+/*
+ * Translate a struct page + offset to a bus address. Pages from the direct-map region are plain
+ * arithmetic. kmalloc() memory comes from the allocator arena instead (outside the region), where
+ * virt_to_page() yields a bogus-but-invertible page pointer: recover the kernel VA from it and ask the
+ * memory manager for the real physical address. (Valid while the buffer sits inside one page, which
+ * holds for USB control/HID traffic; large kmalloc DMA buffers need region-backed allocations.)
+ */
+phys_addr_t kpi_page_phys(struct page *page, size_t offset)
+{
+	unsigned long pfn = ((unsigned long)page - vmemmap_base) / sizeof(struct page);
+	unsigned long va = page_offset_base + (pfn << PAGE_SHIFT) + offset;
+
+	if (va >= (unsigned long)region_va && va < (unsigned long)region_va + region_size)
+		return va - page_offset_base;
+	return nt_virt_to_phys((void *)va);
+}
 dma_addr_t dma_map_page_attrs(struct device *dev, struct page *page, size_t offset, size_t size, enum dma_data_direction dir, unsigned long attrs)
 {
-	return page_to_phys(page) + offset;
+	return kpi_page_phys(page, offset);
 }
 void dma_unmap_page_attrs(struct device *dev, dma_addr_t addr, size_t size, enum dma_data_direction dir, unsigned long attrs) { }
 int dma_map_sgtable(struct device *dev, struct sg_table *sgt, enum dma_data_direction dir, unsigned long attrs)
@@ -306,7 +322,7 @@ int dma_map_sgtable(struct device *dev, struct sg_table *sgt, enum dma_data_dire
 	int i;
 
 	for_each_sgtable_sg(sgt, sg, i) {
-		sg->dma_address = sg_phys(sg);
+		sg->dma_address = kpi_page_phys(sg_page(sg), sg->offset);
 		sg_dma_len(sg) = sg->length;
 	}
 	sgt->nents = sgt->orig_nents;

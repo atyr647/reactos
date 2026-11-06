@@ -474,6 +474,13 @@ unsigned long long LX_ABI nt_time_ms(void)
 }
 
 void LX_ABI nt_dbgprint(const char *s) { DbgPrint("LINUX: %s", s); }
+/* debug aid: print a code address symbolically ("name+off") with a tag */
+void LX_ABI nt_log_addr(const char *tag, void *addr)
+{
+    char Sym[96];
+    if (!LkpiSymbolize((ULONG64)(ULONG_PTR)addr, Sym, sizeof(Sym))) Sym[0] = 0;
+    DbgPrint("LKPI: %s %p %s\n", tag, addr, Sym);
+}
 
 static void (LX_ABI *LkpiTickFn)(void);
 static KTIMER LkpiTickTimer;
@@ -530,6 +537,7 @@ const LKPI_EXPORT LkpiExports[] =
     { "nt_stall_us", (PVOID)nt_stall_us },
     { "nt_time_ms", (PVOID)nt_time_ms },
     { "nt_dbgprint", (PVOID)nt_dbgprint },
+    { "nt_log_addr", (PVOID)nt_log_addr },
     { "nt_register_tick", (PVOID)nt_register_tick },
 };
 

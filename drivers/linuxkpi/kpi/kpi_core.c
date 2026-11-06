@@ -167,12 +167,25 @@ static inline void kpi_spin_release(raw_spinlock_t *lock)
 
 void _raw_spin_lock(raw_spinlock_t *lock) { kpi_spin_acquire(lock); }
 void _raw_spin_unlock(raw_spinlock_t *lock) { kpi_spin_release(lock); }
-void _raw_spin_lock_irq(raw_spinlock_t *lock) { kpi_spin_acquire(lock); }
-void _raw_spin_unlock_irq(raw_spinlock_t *lock) { kpi_spin_release(lock); }
+/* The _irq/_irqsave variants must really mask interrupts: a device ISR (xHCI, ...) takes the same
+ * locks and would otherwise spin forever on the CPU that interrupted the lock holder. */
+static inline unsigned long kpi_irq_save(void)
+{
+	unsigned long f;
+	asm volatile("pushfq; popq %0; cli" : "=r"(f) :: "memory");
+	return f;
+}
+static inline void kpi_irq_restore(unsigned long f)
+{
+	if (f & 0x200)
+		asm volatile("sti" ::: "memory");
+}
+void _raw_spin_lock_irq(raw_spinlock_t *lock) { kpi_irq_save(); kpi_spin_acquire(lock); }
+void _raw_spin_unlock_irq(raw_spinlock_t *lock) { kpi_spin_release(lock); asm volatile("sti" ::: "memory"); }
 void _raw_spin_lock_bh(raw_spinlock_t *lock) { kpi_spin_acquire(lock); }
 void _raw_spin_unlock_bh(raw_spinlock_t *lock) { kpi_spin_release(lock); }
-unsigned long _raw_spin_lock_irqsave(raw_spinlock_t *lock) { kpi_spin_acquire(lock); return 0; }
-void _raw_spin_unlock_irqrestore(raw_spinlock_t *lock, unsigned long flags) { kpi_spin_release(lock); }
+unsigned long _raw_spin_lock_irqsave(raw_spinlock_t *lock) { unsigned long f = kpi_irq_save(); kpi_spin_acquire(lock); return f; }
+void _raw_spin_unlock_irqrestore(raw_spinlock_t *lock, unsigned long flags) { kpi_spin_release(lock); kpi_irq_restore(flags); }
 
 int _raw_spin_trylock(raw_spinlock_t *lock)
 {
@@ -321,8 +334,16 @@ void complete(struct completion *x) { __sync_fetch_and_add(&x->done, 1); }
 void complete_all(struct completion *x) { x->done = 0x7fffffff; }
 void wait_for_completion(struct completion *x)
 {
-	while (x->done == 0)
+	unsigned int spins = 0;
+
+	while (x->done == 0) {
 		nt_sleep_ms(1);
+		if (++spins == 3000) {
+			char b[96];
+			scnprintf(b, sizeof(b), "LKPI: wait_for_completion stuck 3s, caller %px", __builtin_return_address(0));
+			nt_dbgprint(b);
+		}
+	}
 	if (x->done != 0x7fffffff)
 		__sync_fetch_and_sub(&x->done, 1);
 }
@@ -369,8 +390,16 @@ int mutex_trylock(struct mutex *lock)
 
 void mutex_lock(struct mutex *lock)
 {
-	while (atomic_long_cmpxchg(&lock->owner, 0, kpi_self()) != 0)
+	unsigned long spins = 0;
+
+	while (atomic_long_cmpxchg(&lock->owner, 0, kpi_self()) != 0) {
 		nt_sleep_ms(0);
+		if (++spins == 3000000) {
+			char b[128];
+			scnprintf(b, sizeof(b), "LKPI: mutex_lock stuck, lock %px owner %lx self %lx caller %px", lock, (unsigned long)atomic_long_read(&lock->owner), (unsigned long)kpi_self(), __builtin_return_address(0));
+			nt_dbgprint(b);
+		}
+	}
 }
 
 int mutex_lock_interruptible(struct mutex *lock) { mutex_lock(lock); return 0; }
