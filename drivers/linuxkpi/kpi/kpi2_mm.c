@@ -305,11 +305,27 @@ void dma_free_attrs(struct device *dev, size_t size, void *cpu_addr, dma_addr_t 
 phys_addr_t kpi_page_phys(struct page *page, size_t offset)
 {
 	unsigned long pfn = ((unsigned long)page - vmemmap_base) / sizeof(struct page);
-	unsigned long va = page_offset_base + (pfn << PAGE_SHIFT) + offset;
+	/* pfn = (va - page_offset_base) >> 12 as an unsigned shift: for VAs below the direct map the 52-bit
+	 * value is a negative offset with its top 12 bits shifted out, so sign-extend before adding back. */
+	unsigned long d = pfn << PAGE_SHIFT;
+	unsigned long va;
+
+	if (d & (1UL << 51))
+		d |= 0xFFF0000000000000UL;
+	va = page_offset_base + d + offset;
 
 	if (va >= (unsigned long)region_va && va < (unsigned long)region_va + region_size)
 		return va - page_offset_base;
-	return nt_virt_to_phys((void *)va);
+	{
+		unsigned long pa = nt_virt_to_phys((void *)va);
+
+		if (!pa) {
+			char b[160];
+			scnprintf(b, sizeof(b), "kpi_page_phys: no physical address for va %lx (page %px off %zx pob %lx)", va, page, offset, page_offset_base);
+			nt_dbgprint(b);
+		}
+		return pa;
+	}
 }
 dma_addr_t dma_map_page_attrs(struct device *dev, struct page *page, size_t offset, size_t size, enum dma_data_direction dir, unsigned long attrs)
 {

@@ -32,7 +32,7 @@ qemu-system-x86_64 -machine q35 -cpu Nehalem -smp 4 -m 4096 \
 | 1 | Release build | No debug prompts/asserts. **Verified:** Release amd64 (0xA00) ISO, 333 MB, builds with 0 failures and boots to the LiveCD GUI under QEMU/OVMF (UEFI, q35, `-cpu Nehalem`, 4 vCPUs). |
 | 2 | UEFI boot of the ISO | Disable Secure Boot in firmware (ReactOS loaders are unsigned). Boot the USB in UEFI mode. Write the ISO with `dd` (hybrid) or Rufus in **DD mode**. |
 | 3 | Keyboard/mouse + boot from USB | After UEFI exit, USB input may be dead on xHCI-only boards (no legacy emulation). Needs a USB mass-storage path that works on the board's xHCI. ReactOS xHCI support is weak; if the stick is not seen, try a USB 2.0 port / BIOS "xHCI hand-off". |
-| 4 | Installing to disk | **No NVMe driver in ReactOS.** An NVMe-only machine cannot install; use a SATA disk or stay on the live ISO. |
+| 4 | Installing to disk | ReactOS has no native NVMe driver. The LinuxKPI NVMe path works in QEMU (read+write, FAT volume mounted, see README) but is loaded by `sc start linuxkpi` after boot and is not in the CI ISO, so Setup cannot install onto NVMe yet. |
 | 5 | SMP | 5950X = 32 threads. Untested; if it hangs early, set `/ONECPU` (or `/NUMPROC=4`) in freeldr.ini. |
 | 6 | Network | Realtek 2.5GbE / Intel I225 boards: no driver known to be present. Assume no network. |
 | 7 | Display | Without the amdgpu path the 7900 XT is driven by GOP framebuffer only (no acceleration). |

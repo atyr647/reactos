@@ -37,6 +37,18 @@ VOID LkpiFreeModule(_In_ PLKPI_MODULE Module);
 VOID LkpiInitAllocator(VOID);
 PVOID LkpiLookupModuleSymbol(const char *Name);
 VOID LkpiInitInput(VOID);
+/* drmdev.c */
+NTSTATUS NTAPI DrmCreate(PDEVICE_OBJECT Dev, PIRP Irp);
+NTSTATUS NTAPI DrmClean(PDEVICE_OBJECT Dev, PIRP Irp);
+NTSTATUS NTAPI DrmControl(PDEVICE_OBJECT Dev, PIRP Irp);
+/* lkpidisk.c: Linux block devices as SCSI disks */
+VOID LkpiDiskInit(PDRIVER_OBJECT DriverObject);
+VOID LkpiDiskTryHook(VOID);
+BOOLEAN LkDiskOwns(PDEVICE_OBJECT Dev);
+NTSTATUS NTAPI LkDiskPnp(PDEVICE_OBJECT Dev, PIRP Irp);
+NTSTATUS NTAPI LkDiskPower(PDEVICE_OBJECT Dev, PIRP Irp);
+NTSTATUS NTAPI LkDiskScsi(PDEVICE_OBJECT Dev, PIRP Irp);
+NTSTATUS LkDiskControl(PDEVICE_OBJECT Dev, PIRP Irp);
 VOID LX_ABI nt_input_event(unsigned int Type, unsigned int Code, int Value);
 BOOLEAN LkpiSymbolize(ULONG64 Addr, char *Buf, ULONG Len);
 NTSTATUS LkpiCreateDrmNodes(PDRIVER_OBJECT DriverObject);

@@ -1,5 +1,5 @@
 
-add_library(linuxkpi MODULE linuxkpi.c elfldr.c shim.c drmdev.c input.c linuxkpi.rc)
+add_library(linuxkpi MODULE linuxkpi.c elfldr.c shim.c drmdev.c input.c lkpidisk.c linuxkpi.rc)
 set_module_type(linuxkpi kernelmodedriver)
 add_importlibs(linuxkpi ntoskrnl hal)
 add_cd_file(TARGET linuxkpi DESTINATION reactos/system32/drivers FOR all)

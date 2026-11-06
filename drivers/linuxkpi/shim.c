@@ -290,6 +290,12 @@ void LX_ABI nt_unmap_pfns(void *Va, void *MdlPtr)
 lx_ulong LX_ABI nt_virt_to_phys(void *Va)
 {
     LKPI_CHECK_IRQL("nt_virt_to_phys");
+    /* MmGetPhysicalAddress bugchecks (while dumping its stack) on an unmapped address: check first */
+    if (!MmIsAddressValid(Va))
+    {
+        DbgPrint("LKPI: nt_virt_to_phys: %p is not a valid address\n", Va);
+        return 0;
+    }
     return (lx_ulong)MmGetPhysicalAddress(Va).QuadPart;
 }
 

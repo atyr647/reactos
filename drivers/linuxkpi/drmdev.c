@@ -27,7 +27,7 @@ DrmResolve(VOID)
     return DrmOpen && DrmIoctl && DrmClose;
 }
 
-static NTSTATUS NTAPI
+NTSTATUS NTAPI
 DrmCreate(PDEVICE_OBJECT Dev, PIRP Irp)
 {
     PIO_STACK_LOCATION Sp = IoGetCurrentIrpStackLocation(Irp);
@@ -48,7 +48,7 @@ DrmCreate(PDEVICE_OBJECT Dev, PIRP Irp)
     return Status;
 }
 
-static NTSTATUS NTAPI
+NTSTATUS NTAPI
 DrmClean(PDEVICE_OBJECT Dev, PIRP Irp)
 {
     PIO_STACK_LOCATION Sp = IoGetCurrentIrpStackLocation(Irp);
@@ -64,7 +64,7 @@ DrmClean(PDEVICE_OBJECT Dev, PIRP Irp)
     return STATUS_SUCCESS;
 }
 
-static NTSTATUS NTAPI
+NTSTATUS NTAPI
 DrmControl(PDEVICE_OBJECT Dev, PIRP Irp)
 {
     PIO_STACK_LOCATION Sp = IoGetCurrentIrpStackLocation(Irp);
@@ -111,10 +111,6 @@ LkpiCreateDrmNodes(PDRIVER_OBJECT DriverObject)
     static const int Minors[] = { 0, 128 };
     ULONG i;
 
-    DriverObject->MajorFunction[IRP_MJ_CREATE] = DrmCreate;
-    DriverObject->MajorFunction[IRP_MJ_CLEANUP] = DrmClean;
-    DriverObject->MajorFunction[IRP_MJ_CLOSE] = DrmClean;
-    DriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL] = DrmControl;
 
     for (i = 0; i < RTL_NUMBER_OF(Minors); i++)
     {

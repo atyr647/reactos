@@ -187,3 +187,21 @@ bytes through the full path (queue_rq -> PRP setup -> DMA -> completion IRQ -> b
 
 Limits: one I/O queue (INTx only, `nr_cpu_ids` small), no request timeouts/error recovery, no flush/discard
 mapping tested, writes untested, no NT-side disk object yet (next: SCSI-miniport bridge so disk.sys/partmgr/FAT/NTFS see it).
+
+## Milestone: Linux NVMe disk is a normal ReactOS disk
+
+`lkpidisk.c` makes `linuxkpi.sys` a small SCSI port driver: a legacy-detected bus FDO whose BusRelations lists one
+disk PDO per Linux gendisk (`SCSI\Disk&Ven_Linux&Prod_NVMe_disk_N`, hardware ID `GenDisk`). ReactOS' own `disk.sys`,
+`partmgr` and `fastfat` attach and talk SRBs to it (INQUIRY, READ CAPACITY 10/16, READ/WRITE 10/12/16, SYNC CACHE,
+MODE SENSE, claim/release; adapter/device properties, SCSI address, capabilities). Reads/writes go to a worker
+thread -> `kpi_blk_submit()` (Linux, may sleep); the Linux completion arrives in the NVMe ISR and only queues a DPC
+that completes the IRP. SRB buffers are mapped through the MDL (the DataBuffer VA is not a system address).
+
+Verified in QEMU (`-device nvme`, MBR + FAT32 image): the volume appears as a drive letter, `type C:\HELLO.TXT` prints the
+file, `echo > C:\OUT.TXT` / `copy` create files, and the data is present in the raw image on the host afterwards.
+
+Bugs fixed on the way: MmGetPhysicalAddress on unmapped addresses bugchecks while dumping its own stack
+(`nt_virt_to_phys` now validates first); `kpi_page_phys` reconstructs VAs below the direct map correctly.
+
+Limits: not yet a boot/system disk (the driver is loaded by `sc start`, so Setup/boot cannot use it yet), no hot-remove,
+no MSI-X, 128 KiB max transfer, a single LUN per disk, disk name always "NVMe disk N".

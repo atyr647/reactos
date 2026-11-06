@@ -538,6 +538,65 @@ int kpi_blk_rw(struct gendisk *d, int write, unsigned long long byte_off, void *
 }
 EXPORT_SYMBOL_GPL(kpi_blk_rw);
 
+/* Asynchronous variants for the NT bridge. `done(ctx, errno)` runs in the completion context (an ISR
+ * for NVMe): it must only queue work. Call from a thread that may sleep (tag allocation can wait). */
+struct kpi_async { void (*done)(void *ctx, int err); void *ctx; };
+static enum rq_end_io_ret kpi_async_end(struct request *rq, blk_status_t err)
+{
+	struct kpi_async *a = rq->end_io_data;
+	void (*done)(void *, int) = a->done;
+	void *ctx = a->ctx;
+
+	kpi_free_bios(rq);
+	kfree(a);
+	done(ctx, blk_status_to_errno(err));
+	return RQ_END_IO_FREE;
+}
+int kpi_blk_submit(struct gendisk *d, int write, unsigned long long byte_off, void *buf, unsigned int len,
+		   void (*done)(void *ctx, int err), void *ctx)
+{
+	struct kpi_async *a = kmalloc(sizeof(*a), GFP_KERNEL);
+	struct request *rq;
+	int ret;
+
+	if (!a)
+		return -ENOMEM;
+	rq = blk_mq_alloc_request(d->queue, write ? REQ_OP_WRITE : REQ_OP_READ, 0);
+	ret = blk_rq_map_kern(d->queue, rq, buf, len, GFP_KERNEL);
+	if (ret) {
+		blk_mq_free_request(rq);
+		kfree(a);
+		return ret;
+	}
+	rq->__sector = byte_off >> 9;
+	rq->bio->bi_iter.bi_sector = rq->__sector;
+	rq->bio->bi_bdev = d->part0;
+	a->done = done;
+	a->ctx = ctx;
+	rq->end_io = kpi_async_end;
+	rq->end_io_data = a;
+	kpi_dispatch(rq);
+	return 0;
+}
+int kpi_blk_flush(struct gendisk *d, void (*done)(void *ctx, int err), void *ctx)
+{
+	struct kpi_async *a = kmalloc(sizeof(*a), GFP_KERNEL);
+	struct request *rq;
+
+	if (!a)
+		return -ENOMEM;
+	rq = blk_mq_alloc_request(d->queue, REQ_OP_FLUSH | REQ_PREFLUSH, 0);
+	a->done = done;
+	a->ctx = ctx;
+	rq->end_io = kpi_async_end;
+	rq->end_io_data = a;
+	kpi_dispatch(rq);
+	return 0;
+}
+/* The bridge learns about new disks through this hook, called from the disk-registration context. */
+void kpi_blk_set_hook(void (*hook)(struct gendisk *disk, int added)) { kpi_blk_disk_hook = hook; }
+EXPORT_SYMBOL_GPL(kpi_blk_set_hook);
+
 /* ---- NVMe's other odds and ends ---------------------------------------------------------------------- */
 bool __do_once_start(bool *done, unsigned long *flags) { if (*done) return false; *done = true; return true; }
 void __do_once_done(bool *done, struct static_key_true *once_key, unsigned long *flags, struct module *mod) { }
