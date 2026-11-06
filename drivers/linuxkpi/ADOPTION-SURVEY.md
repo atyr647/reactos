@@ -20,3 +20,14 @@ Script: `kpi/survey.py`; full missing lists: `kpi/survey_missing.txt`.
 * Net shim is shared by r8169 and igc (and later e1000e/ath/mt7921 Wi-Fi), so it is the best-value network item.
 * Priority for a machine that must at least boot and take input: xHCI+HID (keyboard/mouse after UEFI exit),
   then NVMe (install target), then NIC.
+
+## Full USB input stack (usbcore + usb-common + hid + usbhid + hid-generic + xhci-hcd + xhci-pci)
+
+488 externals, **158 missing** (`kpi/survey_missing.txt` has xhci alone; full list from the same script with all
+seven objects). They fall into a few shim groups, none of them large:
+
+* driver core: `bus_register`, `driver_register`, `device_attach`, `bus_for_each_dev/drv`, `device_create/destroy`,
+  `device_link_add`, platform_device_* (the USB bus needs real match/probe, our `device_add` is a stub today)
+* input: `input_allocate_device/register_device/event/set_abs_params` (-> feed ReactOS kbd/mouse class drivers)
+* char dev / sysfs / kernfs / pm_runtime / acpi / pm_qos: stubs
+* library: `__kfifo_*`, `gen_pool_*`, `dma_pool_*`, notifier chains, `down_interruptible`, `utf16s_to_utf8s`, `add_timer`
