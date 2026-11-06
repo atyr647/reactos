@@ -164,5 +164,11 @@ Bugs found on the way (each would also break real hardware):
 Debug aids added: `LkpiSymbolize()` (address -> `name+off` for loaded modules), `nt_log_addr`, workqueue
 tracing (`kpi_wq_trace`), stuck-wait tracer in `wait_for_completion`/`mutex_lock`.
 
-Not done yet: forwarding `input_event` to ReactOS keyboard/mouse (kbdclass/mouclass), mass storage, hub hotplug
+Input bridge (verified in QEMU, no PS/2 path): Linux `input_event()` -> `nt_input_event()` ring buffer ->
+system thread (`input.c`) -> private IOCTLs `IOCTL_LKPI_KEYBOARD_INJECT` / `IOCTL_LKPI_MOUSE_INJECT`
+(`sdk/include/reactos/drivers/lkpiinput.h`, handled in `kbdclass`/`mouclass`) -> win32k. Typing `echo usb works`
+on a USB-only keyboard worked; the USB mouse moves the pointer. KEY_* codes are translated to PS/2 set-1 make
+codes (E0 prefix for the extended block).
+
+Not done yet: mass storage (usb-storage + a SCSI/disk bridge), hub hotplug
 removal, MSI (legacy INTx only), USB suspend.

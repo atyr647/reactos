@@ -36,6 +36,8 @@ VOID LkpiFreeModule(_In_ PLKPI_MODULE Module);
 
 VOID LkpiInitAllocator(VOID);
 PVOID LkpiLookupModuleSymbol(const char *Name);
+VOID LkpiInitInput(VOID);
+VOID LX_ABI nt_input_event(unsigned int Type, unsigned int Code, int Value);
 BOOLEAN LkpiSymbolize(ULONG64 Addr, char *Buf, ULONG Len);
 NTSTATUS LkpiCreateDrmNodes(PDRIVER_OBJECT DriverObject);
 void * LX_ABI LkpiMissing(const char *Name);

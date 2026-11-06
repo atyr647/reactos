@@ -538,6 +538,7 @@ const LKPI_EXPORT LkpiExports[] =
     { "nt_time_ms", (PVOID)nt_time_ms },
     { "nt_dbgprint", (PVOID)nt_dbgprint },
     { "nt_log_addr", (PVOID)nt_log_addr },
+    { "nt_input_event", (PVOID)nt_input_event },
     { "nt_register_tick", (PVOID)nt_register_tick },
 };
 

@@ -697,9 +697,7 @@ acpi_status acpi_get_physical_device_location(acpi_handle handle, struct acpi_pl
 /* ================================================================================================
  * input core: events are logged and forwarded to an NT-side hook once the keyboard/mouse bridge exists
  * ============================================================================================== */
-typedef void (*kpi_input_hook_t)(const char *name, unsigned int type, unsigned int code, int value);
-kpi_input_hook_t kpi_input_hook;
-EXPORT_SYMBOL_GPL(kpi_input_hook);
+extern void nt_input_event(unsigned int type, unsigned int code, int value);
 
 struct input_dev *input_allocate_device(void)
 {
@@ -730,10 +728,9 @@ void input_unregister_device(struct input_dev *d)
 }
 void input_event(struct input_dev *d, unsigned int type, unsigned int code, int value)
 {
-	if (type == EV_KEY && kpi_input_hook == NULL)
+	if (type == EV_KEY)
 		pr_info("kpi3_input: %s key %u %s\n", d->name ? d->name : "?", code, value ? "down" : "up");
-	if (kpi_input_hook)
-		kpi_input_hook(d->name, type, code, value);
+	nt_input_event(type, code, value);
 }
 void input_set_abs_params(struct input_dev *d, unsigned int axis, int min, int max, int fuzz, int flat)
 {
