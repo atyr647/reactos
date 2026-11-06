@@ -172,3 +172,18 @@ codes (E0 prefix for the extended block).
 
 Not done yet: mass storage (usb-storage + a SCSI/disk bridge), hub hotplug
 removal, MSI (legacy INTx only), USB suspend.
+
+## Milestone: Linux NVMe driver reads a disk
+
+Unmodified `nvme-core.ko` + `nvme.ko` (Linux 6.12, multipath/hwmon/auth/fabrics off) load on `kpi`+`kpi2`.
+`kpi/kpi4_blk.c` is a minimal blk-mq: tag sets with preallocated requests, one hctx per hardware queue,
+request alloc/execute/complete, kernel-buffer mapping into bios (one bvec per page), `__blk_rq_map_sg`, gendisk
+bookkeeping, mempool, srcu/async/once/param stubs, and legacy-INTx `pci_alloc_irq_vectors` / `pci_request_irq`.
+`kpi_blk_rw(disk, write, byte_off, buf, len)` is the synchronous entry point for the NT side.
+
+Measured in QEMU (`-device nvme`): controller identify, I/O queue creation, namespace scan, disk
+`nvme0n1` registered (131072 sectors, lbs 512) and a self-test read of sector 0 returned the expected
+bytes through the full path (queue_rq -> PRP setup -> DMA -> completion IRQ -> blk_mq_end_request).
+
+Limits: one I/O queue (INTx only, `nr_cpu_ids` small), no request timeouts/error recovery, no flush/discard
+mapping tested, writes untested, no NT-side disk object yet (next: SCSI-miniport bridge so disk.sys/partmgr/FAT/NTFS see it).

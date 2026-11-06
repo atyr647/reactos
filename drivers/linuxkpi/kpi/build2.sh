@@ -2,7 +2,7 @@
 # usage: build2.sh <configured linux-6.12 tree> [outdir]   builds kpi2.ko (needs kpi.ko loaded first at run time)
 set -e
 SRC=$(cd "$1" && pwd); HERE=$(cd "$(dirname "$0")" && pwd); OUT=${2:-$HERE/out2}
-mkdir -p "$OUT"; cp "$HERE"/kpi2_core.c "$HERE"/kpi2_dev.c "$HERE"/kpi2_mm.c "$HERE"/kpi2_pci.c "$HERE"/kpi2_amd.c "$HERE"/kpi2_irq.c "$HERE"/kpi2_drm.c "$HERE"/kpi3_drv.c "$OUT"/; cp "$HERE"/Kbuild2 "$OUT"/Kbuild
+mkdir -p "$OUT"; cp "$HERE"/kpi2_core.c "$HERE"/kpi2_dev.c "$HERE"/kpi2_mm.c "$HERE"/kpi2_pci.c "$HERE"/kpi2_amd.c "$HERE"/kpi2_irq.c "$HERE"/kpi2_drm.c "$HERE"/kpi3_drv.c "$HERE"/kpi4_blk.c "$OUT"/; cp "$HERE"/Kbuild2 "$OUT"/Kbuild
 # USB/HID/xHCI support: generic library code and PCI quirks taken straight from the tree
 USBX="kfifo genalloc"
 for f in $USBX; do cp "$SRC/lib/$f.c" "$OUT/$f.c"; done
