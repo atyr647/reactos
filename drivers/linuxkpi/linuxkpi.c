@@ -110,9 +110,15 @@ DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
         NTSTATUS Status;
         int InitResult = -1;
 
+#ifdef LKPI_EMBEDDED
+        RtlInitUnicodeString(&Path, L"embedded");
+        Status = LkpiLoadModuleEx(&Path, (const UCHAR *)LkpiEmbeddedTable[2 * i],
+                                  (ULONG)(LkpiEmbeddedTable[2 * i + 1] - LkpiEmbeddedTable[2 * i]), &M);
+#else
         RtlStringCbPrintfW(PathBuf, sizeof(PathBuf), L"\\SystemRoot\\system32\\drivers\\lkpimod%u.ko", i);
         RtlInitUnicodeString(&Path, PathBuf);
         Status = LkpiLoadModule(&Path, &M);
+#endif
         if (!NT_SUCCESS(Status))
         {
             DbgPrint("LKPI: module %u failed to load (%08lx)\n", i, Status);

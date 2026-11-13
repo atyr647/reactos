@@ -161,6 +161,13 @@ LkpiFreeModule(PLKPI_MODULE M)
 NTSTATUS
 LkpiLoadModule(PCUNICODE_STRING Path, PLKPI_MODULE *Out)
 {
+    return LkpiLoadModuleEx(Path, NULL, 0, Out);
+}
+
+/* Load from a file (Path), or from an image already in memory (Data/Size, e.g. embedded in this driver). */
+NTSTATUS
+LkpiLoadModuleEx(PCUNICODE_STRING Path, const UCHAR *Data, ULONG DataSize, PLKPI_MODULE *Out)
+{
     PLKPI_MODULE M;
     ELF64_EHDR *Eh;
     ELF64_SHDR *Sh, *SymSh = NULL;
@@ -175,8 +182,19 @@ LkpiLoadModule(PCUNICODE_STRING Path, PLKPI_MODULE *Out)
     if (!M) return STATUS_NO_MEMORY;
     RtlZeroMemory(M, sizeof(*M));
 
-    Status = LkpiReadFile(Path, &M->Image, &M->ImageSize);
-    if (!NT_SUCCESS(Status)) { DbgPrint("LKPI: cannot read module (%08lx)\n", Status); goto fail; }
+    if (Data)
+    {
+        M->Image = ExAllocatePoolWithTag(NonPagedPool, DataSize, LKPI_TAG);
+        if (!M->Image) { Status = STATUS_NO_MEMORY; goto fail; }
+        RtlCopyMemory(M->Image, Data, DataSize);
+        M->ImageSize = DataSize;
+        Status = STATUS_SUCCESS;
+    }
+    else
+    {
+        Status = LkpiReadFile(Path, &M->Image, &M->ImageSize);
+        if (!NT_SUCCESS(Status)) { DbgPrint("LKPI: cannot read module (%08lx)\n", Status); goto fail; }
+    }
 
     Eh = (ELF64_EHDR *)M->Image;
     if (M->ImageSize < sizeof(*Eh) || memcmp(Eh->e_ident, "\177ELF", 4) || Eh->e_ident[4] != 2 || Eh->e_machine != 62 || Eh->e_type != 1)
