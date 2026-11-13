@@ -62,3 +62,12 @@ and Setup had no UEFI bootloader installation. This branch adds, verified in QEM
 
 Limits: MBR only (a GPT disk is not handled by Setup), and install only onto a disk Setup can partition itself. On a PC that
 already has other operating systems, use a separate, empty NVMe drive or disconnect the others while installing.
+
+**Verified end to end in QEMU/OVMF with an NVMe-only VM (no SATA disk, no CD after the install):** text-mode Setup shows the
+NVMe disk, creates and formats FAT32, copies the system, writes `\EFI\BOOT\BOOTX64.EFI` + `freeldr.ini`; after the reboot
+the firmware starts FreeLoader from the NVMe disk, `linuxkpi` loads as a boot driver, the disk appears, the kernel mounts
+`C:\ReactOS` and the GUI second stage (Setup Wizard) runs from the NVMe disk.
+
+Bugs fixed on this path: the arena allocator deadlocked against the NVMe completion interrupt during the large file copy
+(interrupts are now masked while its lock is held); Setup's firmware-disk assumptions (BIOS disks, active partition, `scsi()` ARC
+paths) are bypassed on UEFI.
