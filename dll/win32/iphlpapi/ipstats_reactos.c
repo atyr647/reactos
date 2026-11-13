@@ -742,7 +742,7 @@ DWORD getNumUdpEntries(void)
     status = tdiGetEntityIDSet(tcpFile, &entitySet, &numEntities);
 
     for (i = 0; i < numEntities; i++) {
-        if (entitySet[i].tei_entity == CL_TL_ENTITY && hasArp(tcpFile, &entitySet[i]))
+        if (entitySet[i].tei_entity == CL_TL_ENTITY)
         {
             status = tdiGetSetOfThings(tcpFile,
                 INFO_CLASS_PROTOCOL,
@@ -799,7 +799,7 @@ PVOID getUdpTable(CLASS_TABLE Class)
     status = tdiGetEntityIDSet(tcpFile, &entitySet, &numEntities);
 
     for (i = 0; i < numEntities; i++) {
-        if (entitySet[i].tei_entity == CL_TL_ENTITY && hasArp(tcpFile, &entitySet[i]))
+        if (entitySet[i].tei_entity == CL_TL_ENTITY)
         {
             status = tdiGetSetOfThings(tcpFile,
                 INFO_CLASS_PROTOCOL,
@@ -850,7 +850,7 @@ DWORD getNumTcpEntries(void)
     status = tdiGetEntityIDSet(tcpFile, &entitySet, &numEntities);
 
     for (i = 0; i < numEntities; i++) {
-        if (entitySet[i].tei_entity == CO_TL_ENTITY && hasArp(tcpFile, &entitySet[i]))
+        if (entitySet[i].tei_entity == CO_TL_ENTITY)
         {
             status = tdiGetSetOfThings(tcpFile,
                 INFO_CLASS_PROTOCOL,
@@ -907,7 +907,7 @@ PVOID getTcpTable(CLASS_TABLE Class)
     status = tdiGetEntityIDSet(tcpFile, &entitySet, &numEntities);
 
     for (i = 0; i < numEntities; i++) {
-        if (entitySet[i].tei_entity == CO_TL_ENTITY && hasArp(tcpFile, &entitySet[i]))
+        if (entitySet[i].tei_entity == CO_TL_ENTITY)
         {
             status = tdiGetSetOfThings(tcpFile,
                 INFO_CLASS_PROTOCOL,

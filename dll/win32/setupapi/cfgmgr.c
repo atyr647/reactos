@@ -3464,6 +3464,28 @@ CM_Get_DevNode_Registry_PropertyA(
 
 
 /***********************************************************************
+ * CM_Get_DevNode_PropertyW [SETUPAPI.@]
+ *
+ * DEVPROPKEY based properties are not implemented yet.
+ */
+CONFIGRET
+WINAPI
+CM_Get_DevNode_PropertyW(
+    _In_ DEVINST dnDevInst,
+    _In_ const void *PropertyKey,
+    _Out_ PULONG PropertyType,
+    _Out_writes_bytes_opt_(*PropertyBufferSize) PBYTE PropertyBuffer,
+    _Inout_ PULONG PropertyBufferSize,
+    _In_ ULONG ulFlags)
+{
+    UNREFERENCED_PARAMETER(PropertyBuffer);
+    FIXME("CM_Get_DevNode_PropertyW(%lx %p %p %p %lx) stub\n",
+          dnDevInst, PropertyKey, PropertyType, PropertyBufferSize, ulFlags);
+    return CR_CALL_NOT_IMPLEMENTED;
+}
+
+
+/***********************************************************************
  * CM_Get_DevNode_Registry_PropertyW [SETUPAPI.@]
  */
 CONFIGRET

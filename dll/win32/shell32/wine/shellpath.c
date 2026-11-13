@@ -2727,6 +2727,58 @@ HRESULT WINAPI SHGetFolderPathW(
     return hr;
 }
 
+/*************************************************************************
+ * SHGetKnownFolderPath         [SHELL32.@]
+ *
+ * Vista+ replacement for SHGetFolderPathW, built on the CSIDL table: only
+ * folders that have a CSIDL equivalent are supported.
+ * Of the KF_FLAG_* values only CREATE, DONT_VERIFY and DEFAULT_PATH are
+ * honored; the others are ignored.
+ */
+HRESULT WINAPI SHGetKnownFolderPath(
+    REFKNOWNFOLDERID rfid,
+    DWORD dwFlags,
+    HANDLE hToken,
+    PWSTR *ppszPath)
+{
+    WCHAR path[MAX_PATH];
+    UINT i;
+    int csidl = -1;
+    HRESULT hr;
+
+    if (!ppszPath) return E_INVALIDARG;
+    *ppszPath = NULL;
+    if (!rfid) return E_INVALIDARG;
+
+    for (i = 0; i < sizeof(CSIDL_Data) / sizeof(CSIDL_Data[0]); i++)
+    {
+        if (CSIDL_Data[i].id && IsEqualGUID(rfid, CSIDL_Data[i].id))
+        {
+            csidl = i;
+            break;
+        }
+    }
+
+    if (csidl < 0)
+    {
+        FIXME("unsupported KNOWNFOLDERID %s\n", debugstr_guid(rfid));
+        return HRESULT_FROM_WIN32(ERROR_PATH_NOT_FOUND);
+    }
+
+    if (dwFlags & 0x00008000) csidl |= CSIDL_FLAG_CREATE;      /* KF_FLAG_CREATE */
+    if (dwFlags & 0x00004000) csidl |= CSIDL_FLAG_DONT_VERIFY; /* KF_FLAG_DONT_VERIFY */
+
+    hr = SHGetFolderPathW(NULL, csidl, hToken,
+                          (dwFlags & 0x00000400) ? SHGFP_TYPE_DEFAULT : SHGFP_TYPE_CURRENT, /* KF_FLAG_DEFAULT_PATH */
+                          path);
+    if (FAILED(hr)) return hr;
+
+    *ppszPath = CoTaskMemAlloc((lstrlenW(path) + 1) * sizeof(WCHAR));
+    if (!*ppszPath) return E_OUTOFMEMORY;
+    lstrcpyW(*ppszPath, path);
+    return S_OK;
+}
+
 HRESULT WINAPI SHGetFolderPathAndSubDirA(
 	HWND hwndOwner,    /* [I] owner window */
 	int nFolder,       /* [I] CSIDL identifying the folder */

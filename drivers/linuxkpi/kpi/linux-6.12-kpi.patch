@@ -1,0 +1,32 @@
+--- a/arch/x86/include/asm/cpufeature.h	2024-11-17 22:15:08.000000000 +0000
++++ b/arch/x86/include/asm/cpufeature.h	2026-11-04 12:27:49.363164823 +0000
+@@ -192,12 +192,7 @@
+ 	return false;
+ }
+ 
+-#define static_cpu_has(bit)					\
+-(								\
+-	__builtin_constant_p(boot_cpu_has(bit)) ?		\
+-		boot_cpu_has(bit) :				\
+-		_static_cpu_has(bit)				\
+-)
++#define static_cpu_has(bit) boot_cpu_has(bit) /* LinuxKPI: position independent modules */
+ 
+ #define cpu_has_bug(c, bit)		cpu_has(c, (bit))
+ #define set_cpu_bug(c, bit)		set_cpu_cap(c, (bit))
+--- a/arch/x86/include/asm/page_64.h	2024-11-17 22:15:08.000000000 +0000
++++ b/arch/x86/include/asm/page_64.h	2026-11-04 12:31:54.064254888 +0000
+@@ -51,12 +51,7 @@
+ 	 * below clobbers @page, so we perform unpoisoning before it.
+ 	 */
+ 	kmsan_unpoison_memory(page, PAGE_SIZE);
+-	alternative_call_2(clear_page_orig,
+-			   clear_page_rep, X86_FEATURE_REP_GOOD,
+-			   clear_page_erms, X86_FEATURE_ERMS,
+-			   "=D" (page),
+-			   "D" (page)
+-			   : "cc", "memory", "rax", "rcx");
++	__builtin_memset(page, 0, PAGE_SIZE); /* LinuxKPI: no alternatives */
+ }
+ 
+ void copy_page(void *to, void *from);

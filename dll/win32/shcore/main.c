@@ -2599,3 +2599,26 @@ HRESULT WINAPI CreateRandomAccessStreamOverStream(IStream *stream, BSOS_OPTIONS 
     FIXME("(%p, %d, %s, %p) stub\n", stream, options, debugstr_guid(riid), ppv);
     return E_NOTIMPL;
 }
+
+/*************************************************************************
+ * GetDpiForMonitor [SHCORE.@]
+ *
+ * Per-monitor DPI is not supported: every monitor reports the standard 96.
+ */
+HRESULT WINAPI GetDpiForMonitor(HMONITOR monitor, int type, UINT *x, UINT *y)
+{
+    if (!monitor || type < 0 || type > 2 || !x || !y) return E_INVALIDARG;
+    *x = *y = 96;
+    return S_OK;
+}
+
+/*************************************************************************
+ * SetProcessDpiAwareness [SHCORE.@]
+ *
+ * DPI awareness is accepted but has no effect.
+ */
+HRESULT WINAPI SetProcessDpiAwareness(int value)
+{
+    if (value < 0 || value > 2) return E_INVALIDARG;
+    return S_OK;
+}

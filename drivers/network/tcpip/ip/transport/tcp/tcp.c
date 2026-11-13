@@ -597,9 +597,11 @@ NTSTATUS TCPSendData
     TI_DbgPrint(DEBUG_TCP,("[IP, TCPSendData] Connection->SocketContext = %x\n",
                            Connection->SocketContext));
 
+    /* LibTCPSend takes a 16-bit length, so a bigger request must be sent in parts
+     * (the caller sees a short send and continues). */
     Status = TCPTranslateError(LibTCPSend(Connection,
                                           BufferData,
-                                          SendLength,
+                                          min(SendLength, 0xFFFFU),
                                           BytesSent,
                                           FALSE));
 

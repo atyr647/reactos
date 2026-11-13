@@ -583,7 +583,9 @@ FindFirstFileExA(IN LPCSTR lpFileName,
 
     if ((fInfoLevelId != FindExInfoStandard && fInfoLevelId != FindExInfoBasic) ||
         fSearchOp == FindExSearchLimitToDevices ||
-        dwAdditionalFlags & ~FIND_FIRST_EX_CASE_SENSITIVE /* only supported flag for now */)
+        dwAdditionalFlags & ~(FIND_FIRST_EX_CASE_SENSITIVE |
+                              FIND_FIRST_EX_LARGE_FETCH | /* performance hint, ignored */
+                              0x4 /* FIND_FIRST_EX_ON_DISK_ENTRIES_ONLY, ignored */))
     {
         SetLastError(fSearchOp == FindExSearchLimitToDevices
                                 ? ERROR_NOT_SUPPORTED
@@ -659,7 +661,9 @@ FindFirstFileExW(IN LPCWSTR lpFileName,
 
     if ((fInfoLevelId != FindExInfoStandard && fInfoLevelId != FindExInfoBasic) ||
         fSearchOp == FindExSearchLimitToDevices ||
-        dwAdditionalFlags & ~FIND_FIRST_EX_CASE_SENSITIVE /* only supported flag for now */)
+        dwAdditionalFlags & ~(FIND_FIRST_EX_CASE_SENSITIVE |
+                              FIND_FIRST_EX_LARGE_FETCH | /* performance hint, ignored */
+                              0x4 /* FIND_FIRST_EX_ON_DISK_ENTRIES_ONLY, ignored */))
     {
         SetLastError(fSearchOp == FindExSearchLimitToDevices
                                 ? ERROR_NOT_SUPPORTED

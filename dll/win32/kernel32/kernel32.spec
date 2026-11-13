@@ -202,7 +202,7 @@
 @ stub -version=0x600+ DeleteFileTransactedA
 @ stub -version=0x600+ DeleteFileTransactedW
 @ stdcall DeleteFileW(wstr)
-@ stdcall -stub -version=0x600+ DeleteProcThreadAttributeList(ptr)
+@ stdcall -version=0x600+ DeleteProcThreadAttributeList(ptr)
 @ stdcall DeleteTimerQueue(long)
 @ stdcall DeleteTimerQueueEx(long long)
 @ stdcall DeleteTimerQueueTimer(long long long)
@@ -457,7 +457,7 @@
 @ stdcall GetDriveTypeW(wstr)
 @ stub -version=0x600+ GetDurationFormat
 @ stub -version=0x600+ GetDurationFormatEx
-@ stub -version=0x600+ GetDynamicTimeZoneInformation
+@ stdcall -version=0x600+ GetDynamicTimeZoneInformation(ptr)
 @ stdcall GetEnvironmentStrings()
 @ stdcall GetEnvironmentStringsA() GetEnvironmentStrings
 @ stdcall GetEnvironmentStringsW()
@@ -511,7 +511,7 @@
 @ stdcall GetLogicalDriveStringsW(long ptr)
 @ stdcall GetLogicalDrives()
 @ stdcall GetLogicalProcessorInformation(ptr ptr)
-@ stdcall -stub -version=0x601+ GetLogicalProcessorInformationEx(long ptr ptr)
+@ stdcall -version=0x601+ GetLogicalProcessorInformationEx(long ptr ptr)
 @ stdcall GetLongPathNameA(str long long)
 @ stub -version=0x600+ GetLongPathNameTransactedA
 @ stub -version=0x600+ GetLongPathNameTransactedW
@@ -589,7 +589,7 @@
 @ stdcall GetProfileStringA(str str str ptr long)
 @ stdcall GetProfileStringW(wstr wstr wstr ptr long)
 @ stdcall GetQueuedCompletionStatus(long ptr ptr ptr long)
-@ stub -version=0x600+ GetQueuedCompletionStatusEx
+@ stdcall -version=0x600+ GetQueuedCompletionStatusEx(ptr ptr long ptr long long)
 @ stdcall GetShortPathNameA(str ptr long)
 @ stdcall GetShortPathNameW(wstr ptr long)
 @ stdcall GetStartupInfoA(ptr)
@@ -722,12 +722,121 @@
 @ stdcall -version=0x600+ InitOnceBeginInitialize(ptr long ptr ptr)
 @ stdcall -version=0x600+ InitOnceComplete(ptr long ptr)
 @ stdcall -version=0x600+ InitOnceExecuteOnce(ptr ptr ptr ptr)
+@ stdcall -version=0x600+ WaitOnAddress(ptr ptr long long)
+@ stdcall -private -version=0x600+ PathCchCombineEx(ptr long wstr wstr long)
+@ stdcall -private -version=0x600+ PathCchCombine(ptr long wstr wstr)
+@ stdcall -private -version=0x600+ PathCchAppend(wstr long wstr)
+@ stdcall -private -version=0x600+ PathCchAddBackslash(wstr long)
+@ stdcall -private -version=0x600+ PathCchRemoveFileSpec(wstr long)
+@ stdcall -private -version=0x600+ PathCchFindExtension(wstr long ptr)
+@ stdcall -version=0x600+ AddDllDirectory(wstr)
+@ stdcall -version=0x600+ RemoveDllDirectory(ptr)
+@ stdcall -private -version=0x600+ RegCloseKey(long) advapi32.RegCloseKey
+@ stdcall -private -version=0x600+ RegCreateKeyExA(long str long ptr long long ptr ptr ptr) advapi32.RegCreateKeyExA
+@ stdcall -private -version=0x600+ RegCreateKeyExW(long wstr long ptr long long ptr ptr ptr) advapi32.RegCreateKeyExW
+@ stdcall -private -version=0x600+ RegDeleteKeyExA(long str long long) advapi32.RegDeleteKeyExA
+@ stdcall -private -version=0x600+ RegDeleteKeyExW(long wstr long long) advapi32.RegDeleteKeyExW
+@ stdcall -private -version=0x600+ -private -version=0x600+ RegDeleteTreeA(long str) advapi32.RegDeleteTreeA
+@ stdcall -private -version=0x600+ -private -version=0x600+ RegDeleteTreeW(long wstr) advapi32.RegDeleteTreeW
+@ stdcall -private -version=0x600+ RegDeleteValueA(long str) advapi32.RegDeleteValueA
+@ stdcall -private -version=0x600+ RegDeleteValueW(long wstr) advapi32.RegDeleteValueW
+@ stdcall -private -version=0x600+ RegEnumKeyExA(long long ptr ptr ptr ptr ptr ptr) advapi32.RegEnumKeyExA
+@ stdcall -private -version=0x600+ RegEnumKeyExW(long long ptr ptr ptr ptr ptr ptr) advapi32.RegEnumKeyExW
+@ stdcall -private -version=0x600+ RegEnumValueA(long long ptr ptr ptr ptr ptr ptr) advapi32.RegEnumValueA
+@ stdcall -private -version=0x600+ RegEnumValueW(long long ptr ptr ptr ptr ptr ptr) advapi32.RegEnumValueW
+@ stdcall -private -version=0x600+ RegFlushKey(long) advapi32.RegFlushKey
+@ stdcall -private -version=0x600+ RegGetKeySecurity(long long ptr ptr) advapi32.RegGetKeySecurity
+@ stdcall -private -version=0x600+ RegGetValueA(long str str long ptr ptr ptr) advapi32.RegGetValueA
+@ stdcall -private -version=0x600+ RegGetValueW(long wstr wstr long ptr ptr ptr) advapi32.RegGetValueW
+@ stdcall -private -version=0x600+ RegLoadKeyA(long str str) advapi32.RegLoadKeyA
+@ stdcall -private -version=0x600+ RegLoadKeyW(long wstr wstr) advapi32.RegLoadKeyW
+@ stdcall -private -version=0x600+ -private -version=0x600+ RegLoadMUIStringA(ptr str str long ptr long str) advapi32.RegLoadMUIStringA
+@ stdcall -private -version=0x600+ -private -version=0x600+ RegLoadMUIStringW(ptr wstr wstr long ptr long wstr) advapi32.RegLoadMUIStringW
+@ stdcall -private -version=0x600+ RegNotifyChangeKeyValue(long long long long long) advapi32.RegNotifyChangeKeyValue
+@ stdcall -private -version=0x600+ RegOpenCurrentUser(long ptr) advapi32.RegOpenCurrentUser
+@ stdcall -private -version=0x600+ RegOpenKeyExA(long str long long ptr) advapi32.RegOpenKeyExA
+@ stdcall -private -version=0x600+ RegOpenKeyExW(long wstr long long ptr) advapi32.RegOpenKeyExW
+@ stdcall -private -version=0x600+ RegOpenUserClassesRoot(ptr long long ptr) advapi32.RegOpenUserClassesRoot
+@ stdcall -private -version=0x600+ RegOverridePredefKey(long long) advapi32.RegOverridePredefKey
+@ stdcall -private -version=0x600+ RegQueryInfoKeyA(long ptr ptr ptr ptr ptr ptr ptr ptr ptr ptr ptr) advapi32.RegQueryInfoKeyA
+@ stdcall -private -version=0x600+ RegQueryInfoKeyW(long ptr ptr ptr ptr ptr ptr ptr ptr ptr ptr ptr) advapi32.RegQueryInfoKeyW
+@ stdcall -private -version=0x600+ RegQueryValueExA(long str ptr ptr ptr ptr) advapi32.RegQueryValueExA
+@ stdcall -private -version=0x600+ RegQueryValueExW(long wstr ptr ptr ptr ptr) advapi32.RegQueryValueExW
+@ stdcall -private -version=0x600+ RegRestoreKeyA(long str long) advapi32.RegRestoreKeyA
+@ stdcall -private -version=0x600+ RegRestoreKeyW(long wstr long) advapi32.RegRestoreKeyW
+@ stdcall -private -version=0x600+ RegSaveKeyExA(long str ptr long) advapi32.RegSaveKeyExA
+@ stdcall -private -version=0x600+ RegSaveKeyExW(long str ptr long) advapi32.RegSaveKeyExW
+@ stdcall -private -version=0x600+ RegSetKeySecurity(long long ptr) advapi32.RegSetKeySecurity
+@ stdcall -private -version=0x600+ RegSetValueExA(long str long long ptr long) advapi32.RegSetValueExA
+@ stdcall -private -version=0x600+ RegSetValueExW(long wstr long long ptr long) advapi32.RegSetValueExW
+@ stdcall -private -version=0x600+ RegUnLoadKeyA(long str) advapi32.RegUnLoadKeyA
+@ stdcall -private -version=0x600+ RegUnLoadKeyW(long wstr) advapi32.RegUnLoadKeyW
+@ stdcall -private -version=0x600+ AccessCheck(ptr long long ptr ptr ptr ptr ptr) advapi32.AccessCheck
+@ stdcall -private -version=0x600+ AccessCheckAndAuditAlarmW(wstr ptr wstr wstr ptr long ptr long ptr ptr ptr) advapi32.AccessCheckAndAuditAlarmW
+@ stdcall -private -version=0x600+ AddAccessAllowedAce(ptr long long ptr) advapi32.AddAccessAllowedAce
+@ stdcall -private -version=0x600+ AddAccessAllowedAceEx(ptr long long long ptr) advapi32.AddAccessAllowedAceEx
+@ stdcall -private -version=0x600+ AddAccessDeniedAce(ptr long long ptr) advapi32.AddAccessDeniedAce
+@ stdcall -private -version=0x600+ AddAccessDeniedAceEx(ptr long long long ptr) advapi32.AddAccessDeniedAceEx
+@ stdcall -private -version=0x600+ AddAce(ptr long long ptr long) advapi32.AddAce
+@ stdcall -private -version=0x600+ AdjustTokenGroups(long long ptr long ptr ptr) advapi32.AdjustTokenGroups
+@ stdcall -private -version=0x600+ AdjustTokenPrivileges(long long ptr long ptr ptr) advapi32.AdjustTokenPrivileges
+@ stdcall -private -version=0x600+ AllocateAndInitializeSid(ptr long long long long long long long long long ptr) advapi32.AllocateAndInitializeSid
+@ stdcall -private -version=0x600+ AllocateLocallyUniqueId(ptr) advapi32.AllocateLocallyUniqueId
+@ stdcall -private -version=0x600+ CheckTokenMembership(long ptr ptr) advapi32.CheckTokenMembership
+@ stdcall -private -version=0x600+ CopySid(long ptr ptr) advapi32.CopySid
+@ stdcall -private -version=0x600+ CreateWellKnownSid(long ptr ptr ptr) advapi32.CreateWellKnownSid
+@ stdcall -private -version=0x600+ DeleteAce(ptr long) advapi32.DeleteAce
+@ stdcall -private -version=0x600+ DuplicateToken(long long ptr) advapi32.DuplicateToken
+@ stdcall -private -version=0x600+ DuplicateTokenEx(long long ptr long long ptr) advapi32.DuplicateTokenEx
+@ stdcall -private -version=0x600+ EqualSid(ptr ptr) advapi32.EqualSid
+@ stdcall -private -version=0x600+ FindFirstFreeAce(ptr ptr) advapi32.FindFirstFreeAce
+@ stdcall -private -version=0x600+ FreeSid(ptr) advapi32.FreeSid
+@ stdcall -private -version=0x600+ GetAce(ptr long ptr) advapi32.GetAce
+@ stdcall -private -version=0x600+ GetAclInformation(ptr ptr long long) advapi32.GetAclInformation
+@ stdcall -private -version=0x600+ GetLengthSid(ptr) advapi32.GetLengthSid
+@ stdcall -private -version=0x600+ GetSecurityDescriptorControl(ptr ptr ptr) advapi32.GetSecurityDescriptorControl
+@ stdcall -private -version=0x600+ GetSecurityDescriptorDacl(ptr ptr ptr ptr) advapi32.GetSecurityDescriptorDacl
+@ stdcall -private -version=0x600+ GetSecurityDescriptorGroup(ptr ptr ptr) advapi32.GetSecurityDescriptorGroup
+@ stdcall -private -version=0x600+ GetSecurityDescriptorLength(ptr) advapi32.GetSecurityDescriptorLength
+@ stdcall -private -version=0x600+ GetSecurityDescriptorOwner(ptr ptr ptr) advapi32.GetSecurityDescriptorOwner
+@ stdcall -private -version=0x600+ GetSecurityDescriptorSacl(ptr ptr ptr ptr) advapi32.GetSecurityDescriptorSacl
+@ stdcall -private -version=0x600+ GetSidIdentifierAuthority(ptr) advapi32.GetSidIdentifierAuthority
+@ stdcall -private -version=0x600+ GetSidLengthRequired(long) advapi32.GetSidLengthRequired
+@ stdcall -private -version=0x600+ GetSidSubAuthority(ptr long) advapi32.GetSidSubAuthority
+@ stdcall -private -version=0x600+ GetSidSubAuthorityCount(ptr) advapi32.GetSidSubAuthorityCount
+@ stdcall -private -version=0x600+ GetTokenInformation(long long ptr long ptr) advapi32.GetTokenInformation
+@ stdcall -private -version=0x600+ ImpersonateLoggedOnUser(long) advapi32.ImpersonateLoggedOnUser
+@ stdcall -private -version=0x600+ InitializeAcl(ptr long long) advapi32.InitializeAcl
+@ stdcall -private -version=0x600+ InitializeSecurityDescriptor(ptr long) advapi32.InitializeSecurityDescriptor
+@ stdcall -private -version=0x600+ InitializeSid(ptr ptr long) advapi32.InitializeSid
+@ stdcall -private -version=0x600+ IsTokenRestricted(long) advapi32.IsTokenRestricted
+@ stdcall -private -version=0x600+ IsValidAcl(ptr) advapi32.IsValidAcl
+@ stdcall -private -version=0x600+ IsValidSecurityDescriptor(ptr) advapi32.IsValidSecurityDescriptor
+@ stdcall -private -version=0x600+ IsValidSid(ptr) advapi32.IsValidSid
+@ stdcall -private -version=0x600+ IsWellKnownSid(ptr long) advapi32.IsWellKnownSid
+@ stdcall -private -version=0x600+ MakeAbsoluteSD(ptr ptr ptr ptr ptr ptr ptr ptr ptr ptr ptr) advapi32.MakeAbsoluteSD
+@ stdcall -private -version=0x600+ MakeSelfRelativeSD(ptr ptr ptr) advapi32.MakeSelfRelativeSD
+@ stdcall -private -version=0x600+ MapGenericMask(ptr ptr) advapi32.MapGenericMask
+@ stdcall -private -version=0x600+ OpenProcessToken(long long ptr) advapi32.OpenProcessToken
+@ stdcall -private -version=0x600+ OpenThreadToken(long long long ptr) advapi32.OpenThreadToken
+@ stdcall -private -version=0x600+ PrivilegeCheck(ptr ptr ptr) advapi32.PrivilegeCheck
+@ stdcall -private -version=0x600+ RevertToSelf() advapi32.RevertToSelf
+@ stdcall -private -version=0x600+ SetAclInformation(ptr ptr long long) advapi32.SetAclInformation
+@ stdcall -private -version=0x600+ SetSecurityDescriptorControl(ptr long long) advapi32.SetSecurityDescriptorControl
+@ stdcall -private -version=0x600+ SetSecurityDescriptorDacl(ptr long ptr long) advapi32.SetSecurityDescriptorDacl
+@ stdcall -private -version=0x600+ SetSecurityDescriptorGroup(ptr ptr long) advapi32.SetSecurityDescriptorGroup
+@ stdcall -private -version=0x600+ SetSecurityDescriptorOwner(ptr ptr long) advapi32.SetSecurityDescriptorOwner
+@ stdcall -private -version=0x600+ SetSecurityDescriptorSacl(ptr long ptr long) advapi32.SetSecurityDescriptorSacl
+@ stdcall -private -version=0x600+ SetThreadToken(ptr ptr) advapi32.SetThreadToken
+@ stdcall -private -version=0x600+ SetTokenInformation(long long ptr long) advapi32.SetTokenInformation
+@ stdcall -version=0x600+ WakeByAddressAll(ptr) ntdll.RtlWakeAddressAll
+@ stdcall -version=0x600+ WakeByAddressSingle(ptr) ntdll.RtlWakeAddressSingle
 @ stdcall -version=0x600+ InitOnceInitialize(ptr) ntdll.RtlRunOnceInitialize
 @ stdcall -version=0x600+ InitializeConditionVariable(ptr) ntdll.RtlInitializeConditionVariable
 @ stdcall InitializeCriticalSection(ptr)
 @ stdcall InitializeCriticalSectionAndSpinCount(ptr long)
 @ stdcall -version=0x600+ InitializeCriticalSectionEx(ptr long long)
-@ stdcall -stub -version=0x600+ InitializeProcThreadAttributeList(ptr long long ptr)
+@ stdcall -version=0x600+ InitializeProcThreadAttributeList(ptr long long ptr)
 @ stdcall InitializeSListHead(ptr) ntdll.RtlInitializeSListHead
 @ stdcall -version=0x600+ InitializeSRWLock(ptr) ntdll.RtlInitializeSRWLock
 @ stdcall -arch=i386 -ret64 InterlockedCompareExchange64(ptr double double) ntdll.RtlInterlockedCompareExchange64
@@ -768,12 +877,14 @@
 @ stdcall IsValidLocale(long long)
 @ stdcall -version=0x501-0x502 IsValidUILanguage(long)
 @ stdcall IsWow64Process(ptr ptr)
+@ stdcall -version=0xA00+ IsWow64Process2(ptr ptr ptr)
+@ stdcall -version=0xA00+ GetThreadDescription(ptr ptr)
 @ stdcall -version=0x601+ K32EmptyWorkingSet(long) EmptyWorkingSet
 @ stdcall -version=0x601+ K32EnumDeviceDrivers(ptr long ptr) EnumDeviceDrivers
 @ stdcall -version=0x601+ K32EnumPageFilesA(ptr ptr) EnumPageFilesA
 @ stdcall -version=0x601+ K32EnumPageFilesW(ptr ptr) EnumPageFilesW
 @ stdcall -version=0x601+ K32EnumProcessModules(long ptr long ptr) EnumProcessModules
-@ stdcall -stub -version=0x601+ K32EnumProcessModulesEx(long ptr long ptr long); EnumProcessModulesEx
+@ stdcall -version=0x601+ K32EnumProcessModulesEx(long ptr long ptr long) EnumProcessModulesEx
 @ stdcall -version=0x601+ K32EnumProcesses(ptr long ptr) EnumProcesses
 @ stdcall -version=0x601+ K32GetDeviceDriverBaseNameA(ptr ptr long) GetDeviceDriverBaseNameA
 @ stdcall -version=0x601+ K32GetDeviceDriverBaseNameW(ptr ptr long) GetDeviceDriverBaseNameW
@@ -916,8 +1027,8 @@
 @ stdcall QueryPerformanceCounter(ptr)
 @ stdcall QueryPerformanceFrequency(ptr)
 @ stub -version=0x600+ QueryProcessAffinityUpdateMode
-@ stub -version=0x600+ QueryProcessCycleTime
-@ stub -version=0x600+ QueryThreadCycleTime
+@ stdcall -version=0x600+ QueryProcessCycleTime(ptr ptr)
+@ stdcall -version=0x600+ QueryThreadCycleTime(ptr ptr)
 @ stdcall QueueUserAPC(ptr long long)
 @ stdcall QueueUserWorkItem(ptr ptr long)
 @ stdcall -norelay RaiseException(long long long ptr)
@@ -1184,7 +1295,7 @@
 @ stdcall UnregisterWait(long)
 @ stdcall UnregisterWaitEx(long long)
 @ stub -version=0x600+ UpdateCalendarDayOfWeek
-@ stdcall -stub -version=0x600+ UpdateProcThreadAttribute(ptr long ptr ptr ptr ptr ptr)
+@ stdcall -version=0x600+ UpdateProcThreadAttribute(ptr long ptr ptr ptr ptr ptr)
 @ stdcall UpdateResourceA(long str str long ptr long)
 @ stdcall UpdateResourceW(long wstr wstr long ptr long)
 @ stdcall VDMConsoleOperation(long long)
@@ -1309,3 +1420,19 @@
 ;@ stdcall -arch=x86_64 uaw_wcsicmp(wstr wstr)
 ;@ stdcall -arch=x86_64 uaw_wcslen(wstr)
 ;@ stdcall -arch=x86_64 uaw_wcsrchr(wstr long)
+@ stdcall -version=0x600+ CreateRemoteThreadEx(ptr ptr ptr ptr ptr long ptr ptr)
+@ stdcall -version=0x603+ DiscardVirtualMemory(ptr ptr)
+@ stdcall -version=0x601+ GetMaximumProcessorGroupCount()
+@ stdcall -version=0x602+ GetProcessMitigationPolicy(ptr long ptr ptr)
+@ stdcall -version=0x601+ PowerClearRequest(ptr long)
+@ stdcall -version=0x601+ PowerCreateRequest(ptr)
+@ stdcall -version=0x601+ PowerSetRequest(ptr long)
+@ stdcall -version=0x602+ PrefetchVirtualMemory(ptr ptr ptr long)
+@ stdcall -version=0x600+ ResolveLocaleName(wstr ptr long)
+@ stdcall -version=0x601+ SetDefaultDllDirectories(long)
+@ stdcall -version=0x602+ SetProcessInformation(ptr long ptr long)
+@ stdcall -version=0x602+ SetProcessMitigationPolicy(long ptr ptr)
+@ stdcall -version=0x602+ SetThreadInformation(ptr long ptr long)
+@ stdcall -version=0x601+ WerRegisterRuntimeExceptionModule(wstr ptr)
+@ stdcall -version=0xA00+ QueryUnbiasedInterruptTimePrecise(ptr)
+@ stdcall -version=0xA00+ CompareObjectHandles(ptr ptr)

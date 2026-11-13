@@ -12,6 +12,7 @@
 
 #include "blue.h"
 #include <ndk/inbvfuncs.h>
+#include <ntstrsafe.h>
 
 #define NDEBUG
 #include <debug.h>
@@ -85,6 +86,151 @@ static const UCHAR DefaultPalette[] =
     0xFF, 0xFF, 0,
     0xFF, 0xFF, 0xFF
 };
+
+
+/* UEFI / FRAMEBUFFER CONSOLE *************************************************/
+/*
+ * Without a VGA text mode (UEFI boot through a GOP framebuffer) there is nothing at 0xB8000 to show. In that case the
+ * "video memory" is a shadow buffer in non-paged pool with the same layout (char, attribute per cell), and a thread
+ * paints changed cells into the framebuffer through INBV/bootvid (its 8x13 font, 80 columns x up to 36 rows at 640x480).
+ * No VGA register is touched, since that would take the adapter out of the GOP mode.
+ */
+#define FB_CELL_W 8
+#define FB_CELL_H 13
+#define FB_MAX_ROWS (480 / FB_CELL_H)
+
+static BOOLEAN ScrFb = FALSE;
+static PDEVICE_EXTENSION FbExt = NULL;
+static HANDLE FbThread = NULL;
+static PUCHAR FbShown = NULL;
+static SIZE_T FbShownSize = 0;
+static USHORT FbShownCurX, FbShownCurY;
+static BOOLEAN FbShownCurOn;
+
+/* The firmware tree contains an adapter "UEFI Internal" when freeldr booted through UEFI. */
+static BOOLEAN
+ScrDetectFramebufferConsole(VOID)
+{
+    ULONG i;
+
+    for (i = 0; i < 8; i++)
+    {
+        WCHAR Path[128];
+        UNICODE_STRING Name, Value = RTL_CONSTANT_STRING(L"Identifier");
+        OBJECT_ATTRIBUTES Oa;
+        HANDLE Key;
+        UCHAR Buf[sizeof(KEY_VALUE_PARTIAL_INFORMATION) + 64 * sizeof(WCHAR)];
+        PKEY_VALUE_PARTIAL_INFORMATION Info = (PKEY_VALUE_PARTIAL_INFORMATION)Buf;
+        ULONG Len;
+        BOOLEAN Found = FALSE;
+
+        RtlStringCbPrintfW(Path, sizeof(Path), L"\\Registry\\Machine\\HARDWARE\\DESCRIPTION\\System\\MultifunctionAdapter\\%lu", i);
+        RtlInitUnicodeString(&Name, Path);
+        InitializeObjectAttributes(&Oa, &Name, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+        if (!NT_SUCCESS(ZwOpenKey(&Key, KEY_QUERY_VALUE, &Oa)))
+            continue;
+        if (NT_SUCCESS(ZwQueryValueKey(Key, &Value, KeyValuePartialInformation, Buf, sizeof(Buf) - sizeof(WCHAR), &Len)) &&
+            Info->Type == REG_SZ)
+        {
+            ((PWCHAR)Info->Data)[Info->DataLength / sizeof(WCHAR)] = 0;
+            Found = !_wcsicmp((PWCHAR)Info->Data, L"UEFI Internal");
+        }
+        ZwClose(Key);
+        if (Found)
+            return TRUE;
+    }
+    return FALSE;
+}
+
+static VOID
+FbDrawCell(
+    _In_ ULONG Col,
+    _In_ ULONG Row,
+    _In_ UCHAR Ch,
+    _In_ UCHAR Attr,
+    _In_ BOOLEAN Cursor)
+{
+    ULONG x = Col * FB_CELL_W, y = Row * FB_CELL_H;
+    UCHAR fg = Attr & 0x0F, bg = (Attr >> 4) & 0x0F;
+    CHAR Str[2];
+
+    /* VGA attribute colours are bit0 = blue, bit1 = green, bit2 = red, bit3 = bright; bootvid's palette has red and blue swapped */
+    fg = (fg & 0x0A) | ((fg & 0x01) << 2) | ((fg & 0x04) >> 2);
+    bg = (bg & 0x0A) | ((bg & 0x01) << 2) | ((bg & 0x04) >> 2);
+    if (Cursor) { UCHAR t = fg; fg = bg; bg = t; if (fg == bg) fg = bg ? 0 : 7; }
+    InbvSolidColorFill(x, y, x + FB_CELL_W - 1, y + FB_CELL_H - 1, bg);
+    if (Ch < 0x21 && Ch != 0x1F) return;        /* blank or control character */
+    InbvSetTextColor(fg);
+    InbvSetScrollRegion(x, y, 639, 479);
+    Str[0] = (CHAR)Ch;
+    Str[1] = 0;
+    InbvDisplayString(Str);
+}
+
+static VOID
+FbRender(VOID)
+{
+    PDEVICE_EXTENSION E = FbExt;
+    PUCHAR Vm;
+    ULONG Cols, Rows, Cell, Row, Col;
+    BOOLEAN CurOn;
+
+    if (!E || !E->Enabled || !E->VideoMemory || !FbShown) return;
+    Vm = E->VideoMemory;
+    Cols = E->Columns;
+    Rows = min((ULONG)E->Rows, (ULONG)FB_MAX_ROWS);
+    if (Cols * Rows * 2 > FbShownSize) return;
+    CurOn = E->CursorVisible && E->CursorY < Rows && E->CursorX < Cols;
+
+    for (Row = 0; Row < Rows; Row++)
+    {
+        for (Col = 0; Col < Cols; Col++)
+        {
+            BOOLEAN IsCur = CurOn && E->CursorX == Col && E->CursorY == Row;
+            BOOLEAN WasCur = FbShownCurOn && FbShownCurX == Col && FbShownCurY == Row;
+            Cell = (Row * E->Columns + Col) * 2;
+            if (Vm[Cell] != FbShown[Cell] || Vm[Cell + 1] != FbShown[Cell + 1] || IsCur != WasCur)
+            {
+                UCHAR Ch = Vm[Cell], At = Vm[Cell + 1];
+                FbShown[Cell] = Ch;
+                FbShown[Cell + 1] = At;
+                FbDrawCell(Col, Row, Ch, At, IsCur);
+            }
+        }
+    }
+    FbShownCurOn = CurOn;
+    FbShownCurX = E->CursorX;
+    FbShownCurY = E->CursorY;
+}
+
+static VOID
+NTAPI
+FbRenderThread(_In_ PVOID Context)
+{
+    LARGE_INTEGER Delay;
+
+    UNREFERENCED_PARAMETER(Context);
+    Delay.QuadPart = -10 * 1000 * 30;   /* 30 ms */
+    for (;;)
+    {
+        KeDelayExecutionThread(KernelMode, FALSE, &Delay);
+        FbRender();
+    }
+}
+
+static VOID
+FbStartRenderer(VOID)
+{
+    if (!FbThread)
+    {
+        /* With /NOGUIBOOT (Setup) the kernel left the boot video driver DISABLED: take the display back */
+        InbvAcquireDisplayOwnership();
+        InbvResetDisplay();     /* initialises the 16-colour palette (bootvid starts with an all-black one) */
+        InbvEnableDisplayString(TRUE);
+        if (!NT_SUCCESS(PsCreateSystemThread(&FbThread, THREAD_ALL_ACCESS, NULL, NULL, NULL, FbRenderThread, NULL)))
+            FbThread = NULL;
+    }
+}
 
 /* INBV MANAGEMENT FUNCTIONS **************************************************/
 
@@ -364,7 +510,7 @@ ScrSetCursor(
 {
     ULONG Offset;
 
-    if (!DeviceExtension->VideoMemory)
+    if (!DeviceExtension->VideoMemory || ScrFb)
         return;
 
     Offset = (DeviceExtension->CursorY * DeviceExtension->Columns) + DeviceExtension->CursorX;
@@ -385,7 +531,7 @@ ScrSetCursorShape(
     ULONG size, height;
     UCHAR data, value;
 
-    if (!DeviceExtension->VideoMemory)
+    if (!DeviceExtension->VideoMemory || ScrFb)
         return;
 
     height = DeviceExtension->ScanLines;
@@ -414,6 +560,17 @@ ScrAcquireOwnership(
     UCHAR data, value;
     ULONG offset;
     ULONG Index;
+
+    if (ScrFb)
+    {
+        /* Fixed 80x25 text screen painted into the framebuffer; keep the cursor where it was */
+        DeviceExtension->Columns = 80;
+        DeviceExtension->Rows = 25;
+        DeviceExtension->ScanLines = 16;
+        DeviceExtension->CursorX = min(DeviceExtension->CursorX, (USHORT)79);
+        DeviceExtension->CursorY = min(DeviceExtension->CursorY, (USHORT)24);
+        return;
+    }
 
     _disable();
 
@@ -484,7 +641,7 @@ ScrAcquireOwnership(
     DeviceExtension->CursorY = min(max(DeviceExtension->CursorY, 0), DeviceExtension->Rows - 1);
 
     /* Set the font */
-    if (DeviceExtension->FontBitfield)
+    if (DeviceExtension->FontBitfield && !ScrFb)
         ScrSetFont(DeviceExtension->FontBitfield);
 
     DPRINT("%d Columns  %d Rows %d Scanlines\n",
@@ -538,7 +695,10 @@ ScrResetScreen(
             if (DeviceExtension->VideoMemory)
             {
                 ASSERT(DeviceExtension->VideoMemorySize != 0);
-                MmUnmapIoSpace(DeviceExtension->VideoMemory, DeviceExtension->VideoMemorySize);
+                if (ScrFb)
+                    ExFreePoolWithTag(DeviceExtension->VideoMemory, TAG_BLUE);
+                else
+                    MmUnmapIoSpace(DeviceExtension->VideoMemory, DeviceExtension->VideoMemorySize);
             }
             DeviceExtension->VideoMemory = NULL;
             DeviceExtension->VideoMemorySize = 0;
@@ -559,6 +719,24 @@ ScrResetScreen(
 
             /* Map the video memory */
             BaseAddress.QuadPart = VIDMEM_BASE;
+            if (ScrFb)
+            {
+                DeviceExtension->VideoMemory =
+                    (PUCHAR)ExAllocatePoolWithTag(NonPagedPool, DeviceExtension->VideoMemorySize, TAG_BLUE);
+                if (DeviceExtension->VideoMemory)
+                {
+                    RtlZeroMemory(DeviceExtension->VideoMemory, DeviceExtension->VideoMemorySize);
+                    if (FbShown) ExFreePoolWithTag(FbShown, TAG_BLUE);
+                    FbShownSize = DeviceExtension->VideoMemorySize;
+                    FbShown = ExAllocatePoolWithTag(NonPagedPool, FbShownSize, TAG_BLUE);
+                    if (FbShown) RtlFillMemory(FbShown, FbShownSize, 0xFF);      /* everything dirty */
+                    FbShownCurOn = FALSE;
+                    FbExt = DeviceExtension;
+                    InbvSolidColorFill(0, 0, 639, 479, 0);
+                    FbStartRenderer();
+                }
+            }
+            else
             DeviceExtension->VideoMemory =
                 (PUCHAR)MmMapIoSpace(BaseAddress, DeviceExtension->VideoMemorySize, MmNonCached);
             if (!DeviceExtension->VideoMemory)
@@ -577,8 +755,9 @@ ScrResetScreen(
                 DeviceExtension->ScreenBufferSize = 0;
             }
 
-            /* (Re-)initialize INBV */
-            ScrInbvInitialize();
+            /* (Re-)initialize INBV (framebuffer mode: the kernel keeps owning the display) */
+            if (!ScrFb)
+                ScrInbvInitialize();
         }
         else
         {
@@ -615,13 +794,17 @@ ScrResetScreen(
              */
 
             /* Clean INBV up */
-            ScrInbvCleanup();
+            if (!ScrFb)
+                ScrInbvCleanup();
 
             /* Unmap any previously mapped video memory */
             if (DeviceExtension->VideoMemory)
             {
                 ASSERT(DeviceExtension->VideoMemorySize != 0);
-                MmUnmapIoSpace(DeviceExtension->VideoMemory, DeviceExtension->VideoMemorySize);
+                if (ScrFb)
+                    ExFreePoolWithTag(DeviceExtension->VideoMemory, TAG_BLUE);
+                else
+                    MmUnmapIoSpace(DeviceExtension->VideoMemory, DeviceExtension->VideoMemorySize);
             }
             DeviceExtension->VideoMemory = NULL;
             DeviceExtension->VideoMemorySize = 0;
@@ -1522,7 +1705,7 @@ ScrIoControl(
             RtlCopyMemory(DeviceExtension->FontBitfield, Irp->AssociatedIrp.SystemBuffer, 256 * 8);
 
             /* Set the font if needed */
-            if (DeviceExtension->Enabled && DeviceExtension->VideoMemory)
+            if (DeviceExtension->Enabled && DeviceExtension->VideoMemory && !ScrFb)
                 ScrSetFont(DeviceExtension->FontBitfield);
 
             Irp->IoStatus.Information = 0;
@@ -1574,6 +1757,9 @@ DriverEntry(
     UNICODE_STRING SymlinkName = RTL_CONSTANT_STRING(L"\\??\\BlueScreen");
 
     DPRINT("Screen Driver 0.0.6\n");
+
+    /* No VGA text mode when booted through UEFI: paint the text screen into the framebuffer instead */
+    ScrFb = ScrDetectFramebufferConsole();
 
     DriverObject->MajorFunction[IRP_MJ_CREATE] = ScrCreateClose;
     DriverObject->MajorFunction[IRP_MJ_CLOSE]  = ScrCreateClose;

@@ -299,7 +299,14 @@ FUNC KiInvalidOpcodeFault
     // FIXME: handle STATUS_INVALID_LOCK_SEQUENCE
 
 KiInvalidOpcodeKernel:
-    /* Kernel mode fault */
+    /* Kernel mode fault. Linux modules (LinuxKPI) execute "ud2" for WARN(): skip it and carry on. */
+    mov rax, [rbp + KTRAP_FRAME_Rip]
+    cmp word ptr [rax], 0x0B0F
+    jne KiInvalidOpcodeDispatch
+    add qword ptr [rbp + KTRAP_FRAME_Rip], 2
+    ExitTrap TF_SAVE_ALL
+
+KiInvalidOpcodeDispatch:
 
     /* Dispatch the exception */
     DispatchException STATUS_ILLEGAL_INSTRUCTION, 0, 0, 0, 0

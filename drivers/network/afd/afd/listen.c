@@ -106,6 +106,7 @@ static NTSTATUS SatisfySuperAccept(PAFD_FCB FCB, PIRP Irp, PAFD_TDI_OBJECT_QELT 
     Irp->Tail.Overlay.DriverContext[2] = NULL;
 
     BYTE *BufferPtr = MmGetSystemAddressForMdlSafe((PMDL)Irp->Tail.Overlay.DriverContext[3], NormalPagePriority);
+    BYTE *ReceiveBuffer = BufferPtr; /* the received data goes first, before the addresses */
     if (!BufferPtr)
         goto end;
 
@@ -146,14 +147,18 @@ static NTSTATUS SatisfySuperAccept(PAFD_FCB FCB, PIRP Irp, PAFD_TDI_OBJECT_QELT 
         goto end;
 
     /* Write the local address */
-    LONG LocalAddressLength = min(AcceptInfo->LocalAddressLength, Buffer->Address.Address->AddressLength);
+    /* TA_ADDRESS::AddressLength does not count the AddressType field, which is copied
+       as the sockaddr family, so the sockaddr is AddressLength + sizeof(USHORT) long. */
+    LONG LocalAddressLength = min(AcceptInfo->LocalAddressLength - sizeof(USHORT),
+                                  Buffer->Address.Address->AddressLength + sizeof(USHORT));
     BufferPtr += AcceptInfo->ReceiveDataLength;
     RtlCopyMemory(BufferPtr, &Buffer->Address.Address->AddressType, LocalAddressLength);
     *(USHORT *)(BufferPtr + AcceptInfo->LocalAddressLength - sizeof(USHORT)) = LocalAddressLength;
     ExFreePool(Buffer);
 
     /* Write the remote address*/
-    LONG RemoteAddressLength = min(AcceptInfo->RemoteAddressLength, RemoteAddress->Address[0].AddressLength);
+    LONG RemoteAddressLength = min(AcceptInfo->RemoteAddressLength - sizeof(USHORT),
+                                  RemoteAddress->Address[0].AddressLength + sizeof(USHORT));
     BufferPtr += AcceptInfo->LocalAddressLength;
     RtlCopyMemory(BufferPtr, &RemoteAddress->Address[0].AddressType, RemoteAddressLength);
 
@@ -166,7 +171,7 @@ static NTSTATUS SatisfySuperAccept(PAFD_FCB FCB, PIRP Irp, PAFD_TDI_OBJECT_QELT 
 
         Status = TdiReceive(&FCB2->ReceiveIrp.InFlightRequest,
                             FCB2->Connection.Object, TDI_RECEIVE_NORMAL,
-                            (PCHAR)BufferPtr,
+                            (PCHAR)ReceiveBuffer,
                             AcceptInfo->ReceiveDataLength,
                             AcceptExReceiveComplete,
                             FCB2);

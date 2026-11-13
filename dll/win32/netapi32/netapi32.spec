@@ -150,6 +150,8 @@
 @ stdcall NetGetAnyDCName(wstr wstr ptr)
 @ stdcall NetGetDCName(wstr wstr ptr)
 @ stdcall NetGetDisplayInformationIndex(wstr long wstr ptr)
+@ stdcall NetFreeAadJoinInformation(ptr)
+@ stdcall NetGetAadJoinInformation(wstr ptr)
 @ stdcall NetGetJoinInformation(wstr ptr ptr)
 @ stdcall NetGetJoinableOUs(wstr wstr wstr wstr ptr ptr)
 @ stdcall NetGroupAdd(wstr long ptr ptr)

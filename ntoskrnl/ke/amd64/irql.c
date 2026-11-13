@@ -14,6 +14,13 @@
 /* FUNCTIONS ****************************************************************/
 
 NTKERNELAPI
+VOID
+KxInitializeSpinLock(IN PKSPIN_LOCK SpinLock)
+{
+    *SpinLock = 0;
+}
+
+NTKERNELAPI
 KIRQL
 KxGetCurrentIrql(VOID)
 {

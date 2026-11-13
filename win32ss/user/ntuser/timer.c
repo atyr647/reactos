@@ -482,8 +482,9 @@ ProcessTimers(VOID)
     {
        if (pTmr->cmsCountdown < 0)
        {
-          ASSERT(pTmr->pti);
-          if ((!(pTmr->flags & TMRF_READY)) && (!(pTmr->pti->TIF_flags & TIF_INCLEANUP)))
+          /* Raw input thread timers (TMRF_RIT) and timers whose thread is
+           * going away have no owning thread info, which is handled below. */
+          if ((!(pTmr->flags & TMRF_READY)) && (!pTmr->pti || !(pTmr->pti->TIF_flags & TIF_INCLEANUP)))
           {
              if (pTmr->flags & TMRF_ONESHOT)
                 pTmr->flags |= TMRF_WAITING;

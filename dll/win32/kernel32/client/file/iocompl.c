@@ -186,6 +186,76 @@ GetQueuedCompletionStatus(IN HANDLE CompletionHandle,
 
 /*
  * @implemented
+ *
+ * Retrieves up to ulCount completion packets: waits (up to dwMilliseconds) for
+ * the first one, then takes whatever else is already queued without waiting.
+ * The native NtRemoveIoCompletionEx is not available, so this is built on
+ * NtRemoveIoCompletion. fAlertable is accepted but a completion-port wait is
+ * not alertable here.
+ */
+BOOL
+WINAPI
+GetQueuedCompletionStatusEx(IN HANDLE CompletionPort,
+                            OUT LPOVERLAPPED_ENTRY lpCompletionPortEntries,
+                            IN ULONG ulCount,
+                            OUT PULONG ulNumEntriesRemoved,
+                            IN DWORD dwMilliseconds,
+                            IN BOOL fAlertable)
+{
+    NTSTATUS Status;
+    IO_STATUS_BLOCK IoStatus;
+    ULONG_PTR CompletionKey;
+    PVOID ApcContext;
+    LARGE_INTEGER Time, NoWait;
+    PLARGE_INTEGER TimePtr;
+    ULONG Count = 0;
+
+    UNREFERENCED_PARAMETER(fAlertable);
+
+    if (!lpCompletionPortEntries || !ulNumEntriesRemoved || ulCount == 0)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    *ulNumEntriesRemoved = 0;
+    NoWait.QuadPart = 0;
+    TimePtr = BaseFormatTimeOut(&Time, dwMilliseconds);
+
+    while (Count < ulCount)
+    {
+        Status = NtRemoveIoCompletion(CompletionPort,
+                                      (PVOID*)&CompletionKey,
+                                      &ApcContext,
+                                      &IoStatus,
+                                      Count ? &NoWait : TimePtr);
+        if (Status == STATUS_TIMEOUT)
+        {
+            /* Nothing more is ready. Fail only if we got nothing at all. */
+            if (Count) break;
+            SetLastError(WAIT_TIMEOUT);
+            return FALSE;
+        }
+        if (!NT_SUCCESS(Status))
+        {
+            if (Count) break;
+            BaseSetLastNTError(Status);
+            return FALSE;
+        }
+
+        lpCompletionPortEntries[Count].lpCompletionKey = CompletionKey;
+        lpCompletionPortEntries[Count].lpOverlapped = (LPOVERLAPPED)ApcContext;
+        lpCompletionPortEntries[Count].Internal = (ULONG_PTR)IoStatus.Status;
+        lpCompletionPortEntries[Count].dwNumberOfBytesTransferred = (DWORD)IoStatus.Information;
+        Count++;
+    }
+
+    *ulNumEntriesRemoved = Count;
+    return TRUE;
+}
+
+/*
+ * @implemented
  */
 BOOL
 WINAPI

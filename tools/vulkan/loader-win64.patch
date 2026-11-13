@@ -1,0 +1,104 @@
+diff --git a/loader/loader_windows.c b/loader/loader_windows.c
+index f73659c..7a62375 100644
+--- a/loader/loader_windows.c
++++ b/loader/loader_windows.c
+@@ -63,6 +63,12 @@
+ typedef HRESULT(APIENTRY *PFN_CreateDXGIFactory1)(REFIID riid, void **ppFactory);
+ PFN_CreateDXGIFactory1 fpCreateDXGIFactory1;
+ 
++static HRESULT WINAPI loader_stub_create_dxgi_factory1(REFIID riid, void **ppFactory) {
++    (void)riid;
++    if (ppFactory) *ppFactory = NULL;
++    return E_NOINTERFACE;
++}
++
+ // Empty function just so windows_initialization can find the current module location
+ void function_for_finding_the_current_module(void) {}
+ 
+@@ -84,9 +90,14 @@ void windows_initialization(void) {
+     wchar_t systemPath[MAX_PATH] = L"";
+     GetSystemDirectoryW(systemPath, MAX_PATH);
+     StringCchCatW(systemPath, MAX_PATH, L"\\dxgi.dll");
+-    HMODULE dxgi_module = LoadLibraryW(systemPath);
++    /* ReactOS: its dxgi/wined3d pops up a blocking "needs OpenGL 2.0" box; allow opting out of DXGI. */
++    HMODULE dxgi_module = getenv("VK_LOADER_NO_DXGI") ? NULL : LoadLibraryW(systemPath);
+     fpCreateDXGIFactory1 =
+         dxgi_module == NULL ? NULL : (PFN_CreateDXGIFactory1)(void *)GetProcAddress(dxgi_module, "CreateDXGIFactory1");
++    if (fpCreateDXGIFactory1 == NULL) {
++        /* callers invoke the pointer unconditionally; fail cleanly instead of calling NULL */
++        fpCreateDXGIFactory1 = loader_stub_create_dxgi_factory1;
++    }
+ 
+ #if !defined(NDEBUG)
+     _set_error_mode(_OUT_TO_STDERR);
+diff --git a/loader/unknown_ext_chain_gas_x86.S b/loader/unknown_ext_chain_gas_x86.S
+index 5ee0205..50ab922 100644
+--- a/loader/unknown_ext_chain_gas_x86.S
++++ b/loader/unknown_ext_chain_gas_x86.S
+@@ -36,6 +36,58 @@
+ #include "gen_defines.asm"
+ 
+ .ifdef X86_64
++#ifdef _WIN64
++
++.macro PhysDevExtTramp num
++.global vkPhysDevExtTramp\num
++#if defined(__ELF__)
++.hidden vkPhysDevExtTramp\num
++#endif
++vkPhysDevExtTramp\num:
++    _CET_ENDBR
++    mov     rax, [rcx]
++    mov     rcx, [rcx + PHYS_DEV_OFFSET_PHYS_DEV_TRAMP]
++    jmp     [rax + (PHYS_DEV_OFFSET_INST_DISPATCH + (PTR_SIZE * \num))]
++.endm
++
++.macro PhysDevExtTermin num
++.global vkPhysDevExtTermin\num
++#if defined(__ELF__)
++.hidden vkPhysDevExtTermin\num
++#endif
++vkPhysDevExtTermin\num:
++    _CET_ENDBR
++    mov     rax, [rcx + ICD_TERM_OFFSET_PHYS_DEV_TERM]                          # Store the loader_icd_term* in rax
++    cmp     qword ptr [rax + (DISPATCH_OFFSET_ICD_TERM + (PTR_SIZE * \num))], 0 # Check if the next function in the chain is NULL
++    je      terminError\num                                                     # Go to the error section if it is NULL
++    mov     rcx, [rcx + PHYS_DEV_OFFSET_PHYS_DEV_TERM]                          # Load the unwrapped VkPhysicalDevice into the first arg
++    jmp     [rax + (DISPATCH_OFFSET_ICD_TERM + (PTR_SIZE * \num))]              # Jump to the next function in the chain
++terminError\num:
++    sub     rsp, 56                      # shadow space + 5th arg + alignment
++    mov     rcx, [rax + INSTANCE_OFFSET_ICD_TERM]   # loader_instance (first arg, rcx on Win64)
++    lea     rdx, [VULKAN_LOADER_ERROR_BIT]          # error bit (second arg)
++    xor     r8, r8                                  # zero (third arg)
++    lea     r9, [rip + termin_error_string]         # format string (fourth arg)
++    mov     r10, [rcx + (FUNCTION_OFFSET_INSTANCE + (CHAR_PTR_SIZE * \num))]   # func name
++    mov     [rsp + 32], r10                         # fifth arg on the stack
++    call    loader_log                                                          # Log the error message before we crash
++    add     rsp, 56                                                             # Clean up the stack frame
++    mov     rax, 0
++    jmp     rax                                                                 # Crash intentionally by jumping to address zero
++.endm
++
++.macro DevExtTramp num
++.global vkdev_ext\num
++#if defined(__ELF__)
++.hidden vkdev_ext\num
++#endif
++vkdev_ext\num:
++    _CET_ENDBR
++    mov     rax, [rcx]                                                          # Dereference the handle to get the dispatch table
++    jmp     [rax + (EXT_OFFSET_DEVICE_DISPATCH + (PTR_SIZE * \num))]            # Jump to the appropriate call chain
++.endm
++
++#else
+ 
+ .macro PhysDevExtTramp num
+ .global vkPhysDevExtTramp\num
+@@ -85,6 +137,7 @@ vkdev_ext\num:
+     jmp     [rax + (EXT_OFFSET_DEVICE_DISPATCH + (PTR_SIZE * \num))]            # Jump to the appropriate call chain
+ .endm
+ 
++#endif
+ .else
+ 
+ .macro PhysDevExtTramp num

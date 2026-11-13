@@ -227,6 +227,8 @@ InitializeSetup(
     _In_ PSPFILE_EXPORTS pSpFileExports,
     _In_ PSPINF_EXPORTS pSpInfExports);
 
+BOOLEAN IsUefiFirmware(VOID);
+
 VOID
 NTAPI
 FinishSetup(

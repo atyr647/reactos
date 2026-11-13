@@ -333,6 +333,80 @@ KiDispatchException(IN PEXCEPTION_RECORD ExceptionRecord,
         /* User mode exception, was it first-chance? */
         if (FirstChance)
         {
+            /* Bring-up aid: log user-mode access violations with registers and a raw stack dump */
+            if (ExceptionRecord->ExceptionCode == STATUS_ACCESS_VIOLATION)
+            {
+                static LONG KiAvLogCount;
+                if (InterlockedIncrement(&KiAvLogCount) <= 20)
+                {
+                    PULONG64 Stk = (PULONG64)Context.Rsp;
+                    ULONG i;
+                    DPRINT1("UM-AV %.16s tid %p: rip %p %s addr %p rsp %p rax %p rcx %p rdx %p rbx %p rsi %p rdi %p\n",
+                            PsGetCurrentProcess()->ImageFileName, PsGetCurrentThread()->Cid.UniqueThread,
+                            (PVOID)Context.Rip, ExceptionRecord->ExceptionInformation[0] == 0 ? "read" :
+                            ExceptionRecord->ExceptionInformation[0] == 1 ? "write" : "exec",
+                            (PVOID)ExceptionRecord->ExceptionInformation[1], (PVOID)Context.Rsp,
+                            (PVOID)Context.Rax, (PVOID)Context.Rcx, (PVOID)Context.Rdx, (PVOID)Context.Rbx,
+                            (PVOID)Context.Rsi, (PVOID)Context.Rdi);
+                    _SEH2_TRY
+                    {
+                        PPEB Peb = PsGetCurrentProcess()->Peb;
+                        ULONG64 Probe[2];
+                        ULONG pi;
+                        Probe[0] = Context.Rip;
+                        Probe[1] = (Context.Rsp >= 0x10000 && Context.Rsp + 8 < (ULONG64)MmUserProbeAddress) ? Stk[0] : 0;
+                        if (Peb && Peb->Ldr)
+                        {
+                            for (pi = 0; pi < 2; pi++)
+                            {
+                                PLIST_ENTRY Head = &Peb->Ldr->InLoadOrderModuleList, Ent;
+                                for (Ent = Head->Flink; Ent != Head && Ent; Ent = Ent->Flink)
+                                {
+                                    PLDR_DATA_TABLE_ENTRY M = CONTAINING_RECORD(Ent, LDR_DATA_TABLE_ENTRY, InLoadOrderLinks);
+                                    if (Probe[pi] >= (ULONG64)M->DllBase && Probe[pi] < (ULONG64)M->DllBase + M->SizeOfImage)
+                                    {
+                                        DPRINT1("UM-AV   %s %p is in %wZ +%lx (base %p)\n", pi ? "[rsp]" : "rip", (PVOID)Probe[pi],
+                                                &M->BaseDllName, (ULONG)(Probe[pi] - (ULONG64)M->DllBase), M->DllBase);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        if (Context.Rip >= 0x10000 && Context.Rip + 16 < (ULONG64)MmUserProbeAddress)
+                        {
+                            PUCHAR Code = (PUCHAR)Context.Rip;
+                            DPRINT1("UM-AV   code-16: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
+                                    Code[-16], Code[-15], Code[-14], Code[-13], Code[-12], Code[-11], Code[-10], Code[-9],
+                                    Code[-8], Code[-7], Code[-6], Code[-5], Code[-4], Code[-3], Code[-2], Code[-1]);
+                            DPRINT1("UM-AV   code@rip: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
+                                    Code[0], Code[1], Code[2], Code[3], Code[4], Code[5], Code[6], Code[7],
+                                    Code[8], Code[9], Code[10], Code[11], Code[12], Code[13], Code[14], Code[15]);
+                        }
+                        if (Context.Rip < 0x10000 && Context.Rsp >= 0x10000 && Context.Rsp + 8 < (ULONG64)MmUserProbeAddress &&
+                            Stk[0] >= 0x10080 && Stk[0] < (ULONG64)MmUserProbeAddress - 0x40)
+                        {
+                            /* NULL call: dump the code leading up to the call site (return address in Stk[0]) */
+                            PUCHAR C = (PUCHAR)Stk[0] - 0x40;
+                            ULONG j;
+                            for (j = 0; j < 0x40; j += 16)
+                                DPRINT1("UM-AV   call-site-%02lx: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
+                                        0x40 - j, C[j], C[j+1], C[j+2], C[j+3], C[j+4], C[j+5], C[j+6], C[j+7],
+                                        C[j+8], C[j+9], C[j+10], C[j+11], C[j+12], C[j+13], C[j+14], C[j+15]);
+                        }
+                        if (Context.Rsp < (ULONG64)MmUserProbeAddress)
+                        {
+                            for (i = 0; i < 24; i += 4)
+                                DPRINT1("UM-AV   stack+%02lx: %p %p %p %p\n", i * 8, (PVOID)Stk[i], (PVOID)Stk[i + 1],
+                                        (PVOID)Stk[i + 2], (PVOID)Stk[i + 3]);
+                        }
+                    }
+                    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                    {
+                    }
+                    _SEH2_END;
+                }
+            }
+
             /*
              * Break into the kernel debugger unless a user mode debugger
              * is present or user mode exceptions are ignored, except if this
@@ -384,7 +458,7 @@ KiDispatchException(IN PEXCEPTION_RECORD ExceptionRecord,
         }
 
         /* 3rd strike, kill the process */
-        DPRINT1("Kill %.16s, ExceptionCode: %lx, ExceptionAddress: %lx, BaseAddress: %lx\n",
+        DPRINT1("Kill %.16s, ExceptionCode: %lx, ExceptionAddress: %p, BaseAddress: %p\n",
                 PsGetCurrentProcess()->ImageFileName,
                 ExceptionRecord->ExceptionCode,
                 ExceptionRecord->ExceptionAddress,
@@ -667,6 +741,11 @@ KiGeneralProtectionFaultHandler(
         return STATUS_ACCESS_VIOLATION;
     }
 
+    DPRINT1("Unhandled #GP in %s mode at %p: %02x %02x %02x %02x %02x %02x %02x %02x, rsp %p rax %p rcx %p rdx %p\n",
+            (TrapFrame->SegCs & 3) ? "user" : "kernel", (PVOID)TrapFrame->Rip,
+            Instructions[0], Instructions[1], Instructions[2], Instructions[3],
+            Instructions[4], Instructions[5], Instructions[6], Instructions[7],
+            (PVOID)TrapFrame->Rsp, (PVOID)TrapFrame->Rax, (PVOID)TrapFrame->Rcx, (PVOID)TrapFrame->Rdx);
     ASSERT(FALSE);
     return STATUS_UNSUCCESSFUL;
 }

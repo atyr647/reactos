@@ -648,6 +648,15 @@
 @ stdcall -version=0x600+ D3DKMTOpenAdapterFromHdc(ptr) NtGdiDdDDIOpenAdapterFromHdc
 @ stdcall -version=0x600+ D3DKMTOpenAdapterFromLuid(ptr)
 @ stdcall -version=0x600+ D3DKMTOpenResource(ptr) NtGdiDdDDIOpenResource
+@ stdcall -version=0x600+ D3DKMTOpenResource2(ptr)
+@ stdcall -version=0x600+ D3DKMTOpenResourceFromNtHandle(ptr)
+@ stdcall -version=0x600+ D3DKMTOpenSynchronizationObject(ptr)
+@ stdcall -version=0x600+ D3DKMTOpenSyncObjectFromNtHandle(ptr)
+@ stdcall -version=0x600+ D3DKMTOpenKeyedMutex(ptr)
+@ stdcall -version=0x600+ D3DKMTCreateKeyedMutex2(ptr)
+@ stdcall -version=0x600+ D3DKMTDestroyKeyedMutex(ptr)
+@ stdcall -version=0x600+ D3DKMTQueryResourceInfoFromNtHandle(ptr)
+@ stdcall -version=0x600+ D3DKMTShareObjects(long ptr long ptr)
 @ stdcall -version=0x600+ D3DKMTPollDisplayChildren(ptr) NtGdiDdDDIPollDisplayChildren
 @ stdcall -version=0x600+ D3DKMTPresent(ptr) NtGdiDdDDIPresent
 @ stdcall -version=0x600+ D3DKMTQueryAdapterInfo(ptr) NtGdiDdDDIQueryAdapterInfo
