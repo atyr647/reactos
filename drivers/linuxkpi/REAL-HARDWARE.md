@@ -44,3 +44,21 @@ qemu-system-x86_64 -machine q35 -cpu Nehalem -smp 4 -m 4096 \
 
 * Serial/debug output (`/DEBUG /DEBUGPORT=COM1` in freeldr.ini) or a phone photo of the BSOD / last text.
 * Motherboard model + BIOS version; whether CSM/Secure Boot were on.
+
+
+## 4. Text-mode Setup under UEFI (new in this branch)
+
+Upstream ReactOS Setup could not be used on a UEFI machine: its text screen driver (`blue.sys`) wrote to VGA text memory,
+and Setup had no UEFI bootloader installation. This branch adds, verified in QEMU/OVMF (NVMe-only VM):
+
+* `blue.sys` paints the 80x25 text screen into the UEFI framebuffer when the firmware tree says "UEFI Internal".
+* Setup lists the Linux-driven NVMe disk, creates a FAT32 partition, formats it and copies the system.
+* Bootloader: `\EFI\BOOT\BOOTX64.EFI` (FreeLoader) and `freeldr.ini` on the system partition (the firmware's fallback boot
+  path, no NVRAM entry). The system partition is the install partition (no separate ESP, no GPT yet), and the disk must be
+  FAT32. The ARC path is `multi(0)disk(0)rdisk(N)partition(M)` with N = Setup's disk number, **edit `freeldr.ini` if the
+  firmware orders disks differently**.
+* `linuxkpi` is a boot-start driver, so the installed system can read its own NVMe disk. Boot option `/NOLINUXKPI`
+  skips it (a system installed on NVMe then cannot boot, of course).
+
+Limits: MBR only (a GPT disk is not handled by Setup), and install only onto a disk Setup can partition itself. On a PC that
+already has other operating systems, use a separate, empty NVMe drive or disconnect the others while installing.
