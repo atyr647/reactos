@@ -205,3 +205,10 @@ Bugs fixed on the way: MmGetPhysicalAddress on unmapped addresses bugchecks whil
 
 Limits: not yet a boot/system disk (the driver is loaded by `sc start`, so Setup/boot cannot use it yet), no hot-remove,
 no MSI-X, 128 KiB max transfer, a single LUN per disk, disk name always "NVMe disk N".
+
+## Boot-time loading and reproducible module build
+* `kpi/build-all.sh <workdir>` builds kpi.ko, kpi2.ko and the NVMe/USB/HID modules from a pristine linux-6.12 tarball
+  (`linux-6.12-kpi.patch` + `linux-6.12.config`); output list for `-DLKPI_MODULES=...` in `out/modules.list`.
+  Verified from scratch locally; the CI workflow `x64-live-iso.yml` runs it and caches the result.
+* With modules on the CD the service is registered with Start=1 (`linuxkpi_reg_boot.inf`); boot option `/NOLINUXKPI`
+  (menu entry "without Linux drivers") makes DriverEntry return immediately.

@@ -1,4 +1,4 @@
-; Linux kernel module host (LinuxKPI) - started on demand
+; Linux kernel module host (LinuxKPI) - started on demand (sc start linuxkpi)
 [AddReg]
 HKLM,"SYSTEM\CurrentControlSet\Services\linuxkpi","ErrorControl",0x00010001,0x00000001
 HKLM,"SYSTEM\CurrentControlSet\Services\linuxkpi","Group",0x00000000,"Base"

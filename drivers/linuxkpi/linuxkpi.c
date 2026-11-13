@@ -49,11 +49,46 @@ LkpiDispatch(PDEVICE_OBJECT Dev, PIRP Irp)
     }
 }
 
+/* Boot option /NOLINUXKPI (in HKLM\\SYSTEM\\CurrentControlSet\\Control\\SystemStartOptions) disables the host. */
+static BOOLEAN
+LkpiDisabledByBootOption(VOID)
+{
+    UNICODE_STRING KeyName = RTL_CONSTANT_STRING(L"\\Registry\\Machine\\System\\CurrentControlSet\\Control");
+    UNICODE_STRING ValName = RTL_CONSTANT_STRING(L"SystemStartOptions");
+    OBJECT_ATTRIBUTES Oa;
+    HANDLE Key;
+    UCHAR Buf[sizeof(KEY_VALUE_PARTIAL_INFORMATION) + 512 * sizeof(WCHAR)];
+    PKEY_VALUE_PARTIAL_INFORMATION Info = (PKEY_VALUE_PARTIAL_INFORMATION)Buf;
+    ULONG Len, i, N;
+    PWCHAR S;
+    BOOLEAN Found = FALSE;
+
+    InitializeObjectAttributes(&Oa, &KeyName, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+    if (!NT_SUCCESS(ZwOpenKey(&Key, KEY_QUERY_VALUE, &Oa)))
+        return FALSE;
+    if (NT_SUCCESS(ZwQueryValueKey(Key, &ValName, KeyValuePartialInformation, Buf, sizeof(Buf) - sizeof(WCHAR), &Len)) &&
+        Info->Type == REG_SZ)
+    {
+        S = (PWCHAR)Info->Data;
+        N = Info->DataLength / sizeof(WCHAR);
+        S[N] = 0;
+        for (i = 0; i + 10 <= N; i++)
+            if (!_wcsnicmp(S + i, L"NOLINUXKPI", 10)) { Found = TRUE; break; }
+    }
+    ZwClose(Key);
+    return Found;
+}
+
 NTSTATUS NTAPI
 DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
 {
     ULONG i;
 
+    if (LkpiDisabledByBootOption())
+    {
+        DbgPrint("LKPI: disabled by /NOLINUXKPI\n");
+        return STATUS_CANCELLED;
+    }
     DbgPrint("LKPI: Linux kernel module host starting (%u modules)\n", (ULONG)LKPI_MODULE_COUNT);
     LkpiInitAllocator();
     LkpiInitInput();

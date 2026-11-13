@@ -48,6 +48,22 @@ jobs:
       uses: actions/checkout@v6
       with:
         path: src
+    - name: Install Linux module build dependencies
+      run: sudo apt-get install -y flex bison bc libelf-dev libssl-dev
+    - name: Get Linux modules (LinuxKPI drivers)
+      id: lkpi_cache
+      uses: actions/cache@v5
+      with:
+        path: lkw/out
+        key: lkpi-modules-${{hashFiles('src/drivers/linuxkpi/kpi/**')}}
+    - name: Build Linux modules (NVMe, USB xHCI, HID)
+      if: ${{ steps.lkpi_cache.outputs.cache-hit != 'true' }}
+      run: src/drivers/linuxkpi/kpi/build-all.sh ${{github.workspace}}/lkw
+    - name: Select Linux modules and boot defaults
+      run: |
+        echo "LKPI_MODULES=$(cat ${{github.workspace}}/lkw/out/modules.list)" >> $GITHUB_ENV
+        # release media: boot the normal (non-debug) live entry by default
+        sed -i 's/^DefaultOS=LiveImg_Debug/DefaultOS=LiveImg/' src/boot/bootdata/bootcd.ini
     - name: Set up cache for ccache
       uses: actions/cache@v5
       with:
@@ -62,7 +78,7 @@ jobs:
         echo "CCACHE_SLOPPINESS=time_macros" >> $GITHUB_ENV
         echo "CCACHE_COMPILERCHECK=string:${{steps.get_rosbe_spec.outputs.git-sha}}-${{hashfiles('./build_rosbe_ci.sh')}}" >> $GITHUB_ENV
     - name: Configure
-      run: echo 'cmake -S ${{github.workspace}}/src -B ${{github.workspace}}/build -G Ninja -DCMAKE_TOOLCHAIN_FILE:FILEPATH=toolchain-gcc.cmake -DARCH:STRING=amd64 -DCMAKE_BUILD_TYPE=Release -DDLL_EXPORT_VERSION=${{env.DLLVER}} -DENABLE_CCACHE=1' | ${{github.workspace}}/RosBE-CI/RosBE.sh . 0 amd64
+      run: echo 'cmake -S ${{github.workspace}}/src -B ${{github.workspace}}/build -G Ninja -DCMAKE_TOOLCHAIN_FILE:FILEPATH=toolchain-gcc.cmake -DARCH:STRING=amd64 -DCMAKE_BUILD_TYPE=Release -DDLL_EXPORT_VERSION=${{env.DLLVER}} -DENABLE_CCACHE=1 -DLKPI_MODULES="${{env.LKPI_MODULES}}"' | ${{github.workspace}}/RosBE-CI/RosBE.sh . 0 amd64
     - name: Build and generate ISO
       run: set -o pipefail && echo 'cmake --build ${{github.workspace}}/build --target bootcd' | ${{github.workspace}}/RosBE-CI/RosBE.sh . 0 amd64
     - name: Checksum

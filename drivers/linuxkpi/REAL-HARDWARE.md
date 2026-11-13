@@ -10,8 +10,10 @@ order; stop at the first step that fails and capture the evidence (photo of the 
   (Verify with `sha256sum -c`.) Tag `x64-live-<anything>` to publish it as a release asset instead.
 * Local: `cmake -DARCH=amd64 -DCMAKE_BUILD_TYPE=Release -DDLL_EXPORT_VERSION=0xA00 ...; ninja bootcd`.
 
-The ISO built by CI does **not** contain the LinuxKPI `.ko` modules (they need the Linux 6.12 tree built
-separately; see `README.md`). So CI ISOs boot ReactOS only; the GPU work is exercised in the local build.
+The workflow builds the Linux 6.12 modules from a pristine kernel tarball (`drivers/linuxkpi/kpi/build-all.sh`, verified
+locally from scratch, not yet run on GitHub) and puts NVMe, USB xHCI and HID on the ISO. The LinuxKPI host then loads at
+system start. If a PC misbehaves with it, choose **"ReactOS Live Environment (without Linux drivers)"** in the boot menu
+(boot option `/NOLINUXKPI`). The amdgpu/DRM modules are not part of the ISO yet.
 
 ## 1. Test in a VM first (do this before touching hardware)
 
@@ -31,8 +33,8 @@ qemu-system-x86_64 -machine q35 -cpu Nehalem -smp 4 -m 4096 \
 |---|---|---|
 | 1 | Release build | No debug prompts/asserts. **Verified:** Release amd64 (0xA00) ISO, 333 MB, builds with 0 failures and boots to the LiveCD GUI under QEMU/OVMF (UEFI, q35, `-cpu Nehalem`, 4 vCPUs). |
 | 2 | UEFI boot of the ISO | Disable Secure Boot in firmware (ReactOS loaders are unsigned). Boot the USB in UEFI mode. Write the ISO with `dd` (hybrid) or Rufus in **DD mode**. |
-| 3 | Keyboard/mouse + boot from USB | After UEFI exit, USB input may be dead on xHCI-only boards (no legacy emulation). Needs a USB mass-storage path that works on the board's xHCI. ReactOS xHCI support is weak; if the stick is not seen, try a USB 2.0 port / BIOS "xHCI hand-off". |
-| 4 | Installing to disk | ReactOS has no native NVMe driver. The LinuxKPI NVMe path works in QEMU (read+write, FAT volume mounted, see README) but is loaded by `sc start linuxkpi` after boot and is not in the CI ISO, so Setup cannot install onto NVMe yet. |
+| 3 | Keyboard/mouse + boot from USB | After UEFI exit, USB input may be dead on xHCI-only boards (no legacy emulation). The Linux xHCI/HID stack now provides keyboard and mouse in the live environment once it has loaded (the boot menu itself and the first seconds of boot still depend on firmware USB support). USB storage is not supported yet. Needs a USB mass-storage path that works on the board's xHCI. ReactOS xHCI support is weak; if the stick is not seen, try a USB 2.0 port / BIOS "xHCI hand-off". |
+| 4 | NVMe | ReactOS has no native NVMe driver. The LinuxKPI NVMe path works in QEMU (loaded at boot; read+write, FAT volume mounted, see README) and is on the CI ISO, but only the *live* environment sees it: Setup (text mode) does not load it yet, so installing onto NVMe is not possible yet. Interrupts are legacy INTx (no MSI-X yet), which some SSDs may not accept. |
 | 5 | SMP | 5950X = 32 threads. Untested; if it hangs early, set `/ONECPU` (or `/NUMPROC=4`) in freeldr.ini. |
 | 6 | Network | Realtek 2.5GbE / Intel I225 boards: no driver known to be present. Assume no network. |
 | 7 | Display | Without the amdgpu path the 7900 XT is driven by GOP framebuffer only (no acceleration). |
