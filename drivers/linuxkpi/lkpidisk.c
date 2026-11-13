@@ -71,6 +71,7 @@ static LIST_ENTRY IoQueue;                /* IRPs waiting for the submit thread 
 static PVOID NewDisks[LKDISK_MAX];        /* gendisks reported by Linux, not yet turned into PDOs */
 static ULONG NewDiskCount;
 static BOOLEAN DiskStarted;
+static volatile LONG DiskPending;       /* gendisks reported by Linux whose PDO is not created yet */
 
 typedef struct _LKDISK_IO
 {
@@ -289,12 +290,13 @@ static VOID NTAPI DiskThread(PVOID Ctx)
 
         if (Disk)
         {
-            if (!Fdo && !NT_SUCCESS(CreateFdo())) continue;
+            if (!Fdo && !NT_SUCCESS(CreateFdo())) { InterlockedDecrement(&DiskPending); continue; }
             if (CreateDiskPdo(Fdo, Disk))
             {
                 DbgPrint("LKPI: disk %lu registered with PnP\n", Fdo->Count - 1);
                 IoInvalidateDeviceRelations(Fdo->Lower, BusRelations);
             }
+            InterlockedDecrement(&DiskPending);
         }
         else if (Irp)
         {
@@ -314,7 +316,7 @@ static void LX_ABI LkDiskHook(void *Gendisk, int Added)
 
     if (!Added || !DiskStarted) return;
     KeAcquireSpinLock(&WorkLock, &Old);
-    if (NewDiskCount < LKDISK_MAX) NewDisks[NewDiskCount++] = Gendisk;
+    if (NewDiskCount < LKDISK_MAX) { NewDisks[NewDiskCount++] = Gendisk; InterlockedIncrement(&DiskPending); }
     KeReleaseSpinLock(&WorkLock, Old);
     KeSetEvent(&WorkEvent, IO_NO_INCREMENT, FALSE);
 }
@@ -332,6 +334,18 @@ VOID LkpiDiskInit(PDRIVER_OBJECT DriverObject)
         ZwClose(Th);
         DiskStarted = TRUE;
     }
+}
+
+/* DriverEntry calls this after the modules are initialised: when started as a boot driver the PnP manager enumerates
+ * right after, and the disks must be on the bus by then. */
+VOID LkpiDiskWaitIdle(VOID)
+{
+    LARGE_INTEGER Delay;
+    ULONG i;
+
+    Delay.QuadPart = -10 * 1000 * 50;       /* 50 ms */
+    for (i = 0; i < 200 && DiskPending; i++)
+        KeDelayExecutionThread(KernelMode, FALSE, &Delay);
 }
 
 /* Called by DriverEntry after each module init: once the block layer module is there, install the hook. */

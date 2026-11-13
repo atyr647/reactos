@@ -2,7 +2,7 @@
 add_library(linuxkpi MODULE linuxkpi.c elfldr.c shim.c drmdev.c input.c lkpidisk.c linuxkpi.rc)
 set_module_type(linuxkpi kernelmodedriver)
 add_importlibs(linuxkpi ntoskrnl hal)
-add_cd_file(TARGET linuxkpi DESTINATION reactos/system32/drivers FOR all)
+add_cd_file(TARGET linuxkpi DESTINATION reactos/system32/drivers NO_CAB FOR all)
 
 # Linux modules (cmake -DLKPI_MODULES="/path/kpi.ko;/path/kpi2.ko;...", in load order) are linked into
 # linuxkpi.sys itself (lkpimods.S, .incbin), so the driver is self-contained and can start before any file system exists.

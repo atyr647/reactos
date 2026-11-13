@@ -45,6 +45,7 @@ NTSTATUS NTAPI DrmControl(PDEVICE_OBJECT Dev, PIRP Irp);
 /* lkpidisk.c: Linux block devices as SCSI disks */
 VOID LkpiDiskInit(PDRIVER_OBJECT DriverObject);
 VOID LkpiDiskTryHook(VOID);
+VOID LkpiDiskWaitIdle(VOID);
 BOOLEAN LkDiskOwns(PDEVICE_OBJECT Dev);
 NTSTATUS NTAPI LkDiskPnp(PDEVICE_OBJECT Dev, PIRP Irp);
 NTSTATUS NTAPI LkDiskPower(PDEVICE_OBJECT Dev, PIRP Irp);

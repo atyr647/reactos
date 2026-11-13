@@ -138,5 +138,6 @@ DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
         if (InitResult != 0) break;
     }
     LkpiCreateDrmNodes(DriverObject);
+    LkpiDiskWaitIdle();
     return STATUS_SUCCESS;
 }
