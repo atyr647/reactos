@@ -95,6 +95,40 @@ static PUCHAR LkpiArena, LkpiArenaPtr, LkpiArenaEnd;
 static LKPI_BLOCK *LkpiFree[LKPI_NUM_CLASSES];
 static KSPIN_LOCK LkpiAllocLock;
 
+/*
+ * The arena is used from interrupt handlers too (the NVMe completion frees its bookkeeping at DIRQL), so a thread
+ * holding the lock at DISPATCH_LEVEL could be interrupted by a handler on the same CPU that then spins on it forever
+ * (ReactOS bugchecks with SPIN_LOCK_ALREADY_OWNED). Interrupts are masked while the lock is held, like Linux's
+ * spin_lock_irqsave(). Callers already at DISPATCH_LEVEL or above must not raise the IRQL.
+ */
+typedef struct { ULONG_PTR Flags; KIRQL Irql; BOOLEAN Raised; } LKPI_ALLOC_LOCK_STATE;
+
+static VOID LkpiAllocLockAcquire(LKPI_ALLOC_LOCK_STATE *St)
+{
+    St->Flags = __readeflags();
+    _disable();
+    if (KeGetCurrentIrql() >= DISPATCH_LEVEL)
+    {
+        St->Raised = FALSE;
+        KeAcquireSpinLockAtDpcLevel(&LkpiAllocLock);
+    }
+    else
+    {
+        St->Raised = TRUE;
+        KeAcquireSpinLock(&LkpiAllocLock, &St->Irql);
+    }
+}
+
+static VOID LkpiAllocLockRelease(LKPI_ALLOC_LOCK_STATE *St)
+{
+    if (St->Raised)
+        KeReleaseSpinLock(&LkpiAllocLock, St->Irql);
+    else
+        KeReleaseSpinLockFromDpcLevel(&LkpiAllocLock);
+    if (St->Flags & 0x200)
+        _enable();
+}
+
 VOID LkpiInitAllocator(VOID)
 {
     SIZE_T Size = (SIZE_T)LKPI_ARENA_MB << 20;
@@ -125,11 +159,11 @@ void * LX_ABI nt_alloc(lx_ulong Size, int Zero)
     LKPI_BLOCK *b = NULL;
     lx_ulong Payload;
     ULONG c = LkpiClassOf(Size ? Size : 1, &Payload);
-    KIRQL Old;
+    LKPI_ALLOC_LOCK_STATE Old;
 
     if (c < LKPI_NUM_CLASSES)
     {
-        KeAcquireSpinLock(&LkpiAllocLock, &Old);
+        LkpiAllocLockAcquire(&Old);
         if (LkpiFree[c])
         {
             b = LkpiFree[c];
@@ -140,7 +174,7 @@ void * LX_ABI nt_alloc(lx_ulong Size, int Zero)
             b = (LKPI_BLOCK *)LkpiArenaPtr;
             LkpiArenaPtr += sizeof(LKPI_BLOCK) + Payload;
         }
-        KeReleaseSpinLock(&LkpiAllocLock, Old);
+        LkpiAllocLockRelease(&Old);
         if (b) b->Tag = LKPI_BLOCK_MAGIC | c;
     }
     if (!b)
@@ -160,7 +194,7 @@ void * LX_ABI nt_alloc(lx_ulong Size, int Zero)
 void LX_ABI nt_free(void *p)
 {
     LKPI_BLOCK *b;
-    KIRQL Old;
+    LKPI_ALLOC_LOCK_STATE Old;
     ULONG c;
 
     if (!p) return;
@@ -177,10 +211,10 @@ void LX_ABI nt_free(void *p)
         ExFreePoolWithTag(b, LKPI_TAG);
         return;
     }
-    KeAcquireSpinLock(&LkpiAllocLock, &Old);
+    LkpiAllocLockAcquire(&Old);
     *(LKPI_BLOCK **)(b + 1) = LkpiFree[c];
     LkpiFree[c] = b;
-    KeReleaseSpinLock(&LkpiAllocLock, Old);
+    LkpiAllocLockRelease(&Old);
 }
 
 lx_ulong LX_ABI nt_alloc_size(void *p)
