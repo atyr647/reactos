@@ -29,7 +29,7 @@ mkdir -p "$OUT"
 # in-tree modules (load order matters: dependencies first). Their .o files are the in-tree objects, the .ko is
 # produced without a vmlinux symbol check.
 MODS="drivers/nvme/host/nvme-core drivers/nvme/host/nvme drivers/usb/common/usb-common drivers/usb/core/usbcore \
-drivers/usb/host/xhci-hcd drivers/usb/host/xhci-pci drivers/hid/hid drivers/hid/usbhid/usbhid drivers/hid/hid-generic"
+drivers/usb/host/xhci-hcd drivers/usb/host/xhci-pci drivers/hid/hid drivers/hid/usbhid/usbhid drivers/hid/hid-generic drivers/usb/storage/usb-storage"
 make -C "$SRC" -j"$(nproc)" -k KBUILD_MODPOST_WARN=1 KCFLAGS="$KC" $(for m in $MODS; do echo -n "$m.ko "; done) >"$WORK/mods.log" 2>&1 || true
 
 LIST="$OUT/kpi_out/kpi.ko;$OUT/kpi2_out/kpi2.ko"

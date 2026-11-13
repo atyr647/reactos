@@ -302,6 +302,7 @@ void dma_free_attrs(struct device *dev, size_t size, void *cpu_addr, dma_addr_t 
  * memory manager for the real physical address. (Valid while the buffer sits inside one page, which
  * holds for USB control/HID traffic; large kmalloc DMA buffers need region-backed allocations.)
  */
+extern void nt_log_addr(const char *tag, void *addr);
 phys_addr_t kpi_page_phys(struct page *page, size_t offset)
 {
 	unsigned long pfn = ((unsigned long)page - vmemmap_base) / sizeof(struct page);
@@ -321,15 +322,21 @@ phys_addr_t kpi_page_phys(struct page *page, size_t offset)
 
 		if (!pa) {
 			char b[160];
-			scnprintf(b, sizeof(b), "kpi_page_phys: no physical address for va %lx (page %px off %zx pob %lx)", va, page, offset, page_offset_base);
+			scnprintf(b, sizeof(b), "kpi_page_phys: no physical address for va %lx (page %px off %zx pob %lx vmemmap %lx pfn %lx d %lx)", va, page, offset, page_offset_base, vmemmap_base, pfn, d);
 			nt_dbgprint(b);
+			nt_log_addr("kpi_page_phys caller", __builtin_return_address(0));
 		}
 		return pa;
 	}
 }
+extern void nt_log_addr(const char *tag, void *addr);
 dma_addr_t dma_map_page_attrs(struct device *dev, struct page *page, size_t offset, size_t size, enum dma_data_direction dir, unsigned long attrs)
 {
-	return kpi_page_phys(page, offset);
+	dma_addr_t a = kpi_page_phys(page, offset);
+
+	if (!a)
+		nt_log_addr("dma_map_page_attrs failed, caller", __builtin_return_address(0));
+	return a;
 }
 void dma_unmap_page_attrs(struct device *dev, dma_addr_t addr, size_t size, enum dma_data_direction dir, unsigned long attrs) { }
 int dma_map_sgtable(struct device *dev, struct sg_table *sgt, enum dma_data_direction dir, unsigned long attrs)

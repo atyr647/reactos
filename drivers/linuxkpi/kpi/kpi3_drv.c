@@ -461,7 +461,7 @@ struct timespec64 inode_set_ctime_current(struct inode *inode)
 }
 
 /* ---- scheduler / sync odds and ends ------------------------------------------------------------- */
-struct workqueue_struct *system_bh_wq, *system_bh_highpri_wq, *system_power_efficient_wq;
+struct workqueue_struct *system_bh_wq, *system_bh_highpri_wq, *system_power_efficient_wq, *system_freezable_wq;
 void kpi3_init_wqs(void)
 {
 	extern struct workqueue_struct *system_wq;
@@ -471,6 +471,7 @@ void kpi3_init_wqs(void)
 	system_bh_wq = alloc_workqueue("bh", 0, 1);
 	system_bh_highpri_wq = alloc_workqueue("bh_highpri", 0, 1);
 	system_power_efficient_wq = system_wq;
+	system_freezable_wq = alloc_workqueue("freezable", 0, 1);	/* usb-storage's scan/delayed work */
 	pm_wq = system_wq;
 }
 void __sched yield(void) { schedule_timeout_uninterruptible(1); }
@@ -591,6 +592,11 @@ unsigned int dma_map_sg_attrs(struct device *dev, struct scatterlist *sgl, int n
 	int i;
 
 	for_each_sg(sgl, sg, nents, i) {
+		if (!sg_page(sg) || ((unsigned long)sg_page(sg) >> 60) == 0) {
+			char b[160];
+			scnprintf(b, sizeof(b), "dma_map_sg_attrs: bad sg %d/%d sgl %px sg %px page_link %lx off %u len %u", i, nents, sgl, sg, sg->page_link, sg->offset, sg->length);
+			nt_dbgprint(b);
+		}
 		sg_dma_address(sg) = kpi_page_phys(sg_page(sg), sg->offset);
 		sg_dma_len(sg) = sg->length;
 	}

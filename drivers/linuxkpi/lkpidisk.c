@@ -21,7 +21,7 @@
 #define LKDISK_MAX 8
 #define LKDISK_PORT_NUMBER 10
 static LONG TraceCount;
-#define LKDISK_TRACE(...) do { if (InterlockedIncrement(&TraceCount) < 400) DbgPrint("LKDISK: " __VA_ARGS__); } while (0)
+#define LKDISK_TRACE(...) do { if (InterlockedIncrement(&TraceCount) < 3000) DbgPrint("LKDISK: " __VA_ARGS__); } while (0)
 
 typedef struct _LKDISK_COMMON
 {
@@ -49,6 +49,8 @@ struct _LKDISK_PDO
     ULONG Index;
     ULONG MaxBytes;
     INQUIRYDATA Inquiry;
+    BOOLEAN Scsi;               /* a Linux scsi_device (USB mass storage, ...): every CDB is passed through */
+    PVOID Sdev;
 };
 
 /* ---- the Linux side ----------------------------------------------------------------------------------- */
@@ -57,6 +59,15 @@ typedef int (LX_ABI *PFN_FLUSH)(void *Disk, void (LX_ABI *Done)(void *, int), vo
 typedef ULONG64 (LX_ABI *PFN_CAP)(void *Disk);
 typedef ULONG (LX_ABI *PFN_LBS)(void *Disk);
 typedef void (LX_ABI *PFN_SETHOOK)(void (LX_ABI *Hook)(void *, int));
+typedef int (LX_ABI *PFN_SCSI_SUBMIT)(void *Sdev, const UCHAR *Cdb, int CdbLen, int Dir, void *Buf, ULONG Len,
+                                      void (LX_ABI *Done)(void *, int, int, const UCHAR *), void *Ctx);
+typedef int (LX_ABI *PFN_SDEV_INT)(void *Sdev);
+typedef const char *(LX_ABI *PFN_SDEV_STR)(void *Sdev);
+typedef ULONG (LX_ABI *PFN_SDEV_ULONG)(void *Sdev);
+static PFN_SCSI_SUBMIT ScsiSubmit;
+static PFN_SDEV_INT SdevType, SdevRemovable;
+static PFN_SDEV_STR SdevVendor, SdevModel, SdevRev;
+static PFN_SDEV_ULONG SdevMaxBytes;
 
 static PFN_SUBMIT BlkSubmit;
 static PFN_FLUSH BlkFlush;
@@ -79,6 +90,8 @@ typedef struct _LKDISK_IO
     PIRP Irp;
     PSCSI_REQUEST_BLOCK Srb;
     int Err;
+    int Result, Resid;          /* SCSI passthrough: result word and residual count */
+    UCHAR Sense[32];
 } LKDISK_IO, *PLKDISK_IO;
 
 /* The SRB's DataBuffer is a virtual address in the MDL's original address space; map the MDL to get a usable
@@ -136,6 +149,88 @@ static void LX_ABI LkDiskIoDone(void *Ctx, int Err)
     KeInsertQueueDpc(&Io->Dpc, NULL, NULL);
 }
 
+/* SCSI passthrough completion: SCSI result word (host << 16 | status) -> SRB status */
+static VOID NTAPI LkScsiDpc(PKDPC Dpc, PVOID Ctx, PVOID A1, PVOID A2)
+{
+    PLKDISK_IO Io = Ctx;
+    PIRP Irp = Io->Irp;
+    PSCSI_REQUEST_BLOCK Srb = Io->Srb;
+    ULONG Len = Srb->DataTransferLength;
+    int Result = Io->Result, Resid = Io->Resid;
+    UCHAR Host = (UCHAR)((Result >> 16) & 0xFF), Status = (UCHAR)(Result & 0xFF);
+    UCHAR SrbStatus;
+
+    if (Host == 0 && Status == 0)
+    {
+        SrbStatus = SRB_STATUS_SUCCESS;
+        if (Resid > 0 && (ULONG)Resid <= Len) Len -= Resid;
+    }
+    else if (Host == 0 && Status == 2)          /* CHECK CONDITION */
+    {
+        SrbStatus = SRB_STATUS_ERROR;
+        if (Srb->SenseInfoBuffer && Srb->SenseInfoBufferLength && !(Srb->SrbFlags & SRB_FLAGS_DISABLE_AUTOSENSE))
+        {
+            RtlCopyMemory(Srb->SenseInfoBuffer, Io->Sense, min((ULONG)Srb->SenseInfoBufferLength, (ULONG)18));
+            Srb->SrbStatus = SRB_STATUS_ERROR | SRB_STATUS_AUTOSENSE_VALID;
+            SrbStatus = Srb->SrbStatus;
+        }
+        Len = 0;
+    }
+    else if (Host == 1)                         /* DID_NO_CONNECT */
+        { SrbStatus = SRB_STATUS_SELECTION_TIMEOUT; Len = 0; }
+    else
+        { SrbStatus = SRB_STATUS_ERROR; Len = 0; }
+
+    LKDISK_TRACE("pt cdb %02x result %x resid %d len %lu -> srb %02x sense %02x/%02x/%02x\n", Srb->Cdb[0], Result, Resid, Srb->DataTransferLength, SrbStatus, Io->Sense[2], Io->Sense[12], Io->Sense[13]);
+    ExFreePoolWithTag(Io, LKDISK_TAG);
+    Srb->SrbStatus = SrbStatus;
+    Srb->ScsiStatus = Status ? Status : (SrbStatus == SRB_STATUS_SUCCESS ? SCSISTAT_GOOD : SCSISTAT_CHECK_CONDITION);
+    if (SrbStatus == SRB_STATUS_SUCCESS) Srb->DataTransferLength = Len;
+    Irp->IoStatus.Status = (SrbStatus & 0x3F) == SRB_STATUS_SUCCESS ? STATUS_SUCCESS : STATUS_IO_DEVICE_ERROR;
+    Irp->IoStatus.Information = Len;
+    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+}
+
+static void LX_ABI LkScsiDone(void *Ctx, int Result, int Resid, const UCHAR *Sense)
+{
+    PLKDISK_IO Io = Ctx;
+
+    Io->Result = Result;
+    Io->Resid = Resid;
+    RtlCopyMemory(Io->Sense, Sense, 18);
+    KeInsertQueueDpc(&Io->Dpc, NULL, NULL);
+}
+
+static VOID ScsiStartIo(PIRP Irp)
+{
+    PIO_STACK_LOCATION Sp = IoGetCurrentIrpStackLocation(Irp);
+    PLKDISK_PDO Pdo = Sp->DeviceObject->DeviceExtension;
+    PSCSI_REQUEST_BLOCK Srb = Sp->Parameters.Scsi.Srb;
+    PLKDISK_IO Io;
+    PVOID Va = NULL;
+    int Dir = 3;                                /* DMA_NONE */
+
+    if (Srb->DataTransferLength)
+    {
+        Va = MappedBuffer(Irp, Srb);
+        if (!Va) { SrbDone(Irp, Srb, SRB_STATUS_ERROR, 0); return; }
+        Dir = (Srb->SrbFlags & SRB_FLAGS_DATA_OUT) ? 1 : 2;
+    }
+    LKDISK_TRACE("pt submit cdb %02x len %lu db %p va %p mdl %p mdlva %p\n", Srb->Cdb[0], Srb->DataTransferLength, Srb->DataBuffer, Va, Irp->MdlAddress, Irp->MdlAddress ? MmGetMdlVirtualAddress(Irp->MdlAddress) : NULL);
+    Io = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Io), LKDISK_TAG);
+    if (!Io) { SrbDone(Irp, Srb, SRB_STATUS_ERROR, 0); return; }
+    RtlZeroMemory(Io, sizeof(*Io));
+    KeInitializeDpc(&Io->Dpc, LkScsiDpc, Io);
+    Io->Irp = Irp;
+    Io->Srb = Srb;
+    if (ScsiSubmit(Pdo->Sdev, Srb->Cdb, Srb->CdbLength, Dir, Va, Srb->DataTransferLength, LkScsiDone, Io))
+    {
+        ExFreePoolWithTag(Io, LKDISK_TAG);
+        Srb->SrbStatus = SRB_STATUS_BUSY;
+        SrbDone(Irp, Srb, SRB_STATUS_BUSY, 0);
+    }
+}
+
 static VOID StartIo(PIRP Irp)
 {
     PIO_STACK_LOCATION Sp = IoGetCurrentIrpStackLocation(Irp);
@@ -148,6 +243,12 @@ static VOID StartIo(PIRP Irp)
     PLKDISK_IO Io;
     PVOID Va;
     int R;
+
+    if (Pdo->Scsi)
+    {
+        ScsiStartIo(Irp);
+        return;
+    }
 
     switch (Cdb[0])
     {
@@ -242,6 +343,60 @@ static PLKDISK_PDO CreateDiskPdo(PLKDISK_FDO F, PVOID Gendisk)
     return Pdo;
 }
 
+static void LX_ABI LkScsiHook(void *Sdev, int Added)
+{
+    KIRQL Old;
+
+    if (!Added || !DiskStarted) return;
+    KeAcquireSpinLock(&WorkLock, &Old);
+    if (NewDiskCount < LKDISK_MAX) { NewDisks[NewDiskCount++] = (PVOID)((ULONG_PTR)Sdev | 1); InterlockedIncrement(&DiskPending); }
+    KeReleaseSpinLock(&WorkLock, Old);
+    KeSetEvent(&WorkEvent, IO_NO_INCREMENT, FALSE);
+}
+
+/* A Linux scsi_device (e.g. a USB flash drive): identity from its INQUIRY data; CDBs are passed through. */
+static PLKDISK_PDO CreateScsiPdo(PLKDISK_FDO F, PVOID Sdev)
+{
+    PDEVICE_OBJECT Dev;
+    PLKDISK_PDO Pdo;
+    ULONG Index = F->Count;
+    const char *V, *M, *R;
+    NTSTATUS Status;
+
+    if (Index >= LKDISK_MAX || SdevType(Sdev) != 0) return NULL;      /* direct-access devices only for now */
+    Status = IoCreateDevice(DiskDriver, sizeof(LKDISK_PDO), NULL, FILE_DEVICE_DISK,
+                            FILE_AUTOGENERATED_DEVICE_NAME | FILE_DEVICE_SECURE_OPEN | FILE_REMOVABLE_MEDIA * (SdevRemovable(Sdev) != 0), FALSE, &Dev);
+    if (!NT_SUCCESS(Status)) return NULL;
+    Pdo = Dev->DeviceExtension;
+    RtlZeroMemory(Pdo, sizeof(*Pdo));
+    Pdo->Common.IsFdo = FALSE;
+    Pdo->Common.Self = Dev;
+    Pdo->Fdo = F;
+    Pdo->Scsi = TRUE;
+    Pdo->Sdev = Sdev;
+    Pdo->Index = Index;
+    Pdo->Lbs = 512;
+    Pdo->MaxBytes = min((ULONG)SdevMaxBytes(Sdev), (ULONG)(64 * 1024));
+    RtlZeroMemory(&Pdo->Inquiry, sizeof(Pdo->Inquiry));
+    Pdo->Inquiry.DeviceType = DIRECT_ACCESS_DEVICE;
+    Pdo->Inquiry.RemovableMedia = SdevRemovable(Sdev) != 0;
+    Pdo->Inquiry.Versions = 2;
+    Pdo->Inquiry.ResponseDataFormat = 2;
+    Pdo->Inquiry.AdditionalLength = sizeof(INQUIRYDATA) - 5;
+    V = SdevVendor(Sdev); M = SdevModel(Sdev); R = SdevRev(Sdev);
+    RtlFillMemory(Pdo->Inquiry.VendorId, 8, ' ');
+    RtlFillMemory(Pdo->Inquiry.ProductId, 16, ' ');
+    RtlFillMemory(Pdo->Inquiry.ProductRevisionLevel, 4, ' ');
+    if (V) RtlCopyMemory(Pdo->Inquiry.VendorId, V, min((SIZE_T)8, strlen(V)));
+    if (M) RtlCopyMemory(Pdo->Inquiry.ProductId, M, min((SIZE_T)16, strlen(M)));
+    if (R) RtlCopyMemory(Pdo->Inquiry.ProductRevisionLevel, R, min((SIZE_T)4, strlen(R)));
+    Dev->Flags |= DO_DIRECT_IO;
+    Dev->StackSize = F->Common.Self->StackSize + 1;
+    Dev->Flags &= ~DO_DEVICE_INITIALIZING;
+    F->Disks[F->Count++] = Pdo;
+    return Pdo;
+}
+
 static NTSTATUS CreateFdo(VOID)
 {
     PDEVICE_OBJECT FdoObj, LowerPdo = NULL;
@@ -290,8 +445,12 @@ static VOID NTAPI DiskThread(PVOID Ctx)
 
         if (Disk)
         {
+            BOOLEAN IsScsi = ((ULONG_PTR)Disk & 1) != 0;
+            PLKDISK_PDO NewPdo;
+
             if (!Fdo && !NT_SUCCESS(CreateFdo())) { InterlockedDecrement(&DiskPending); continue; }
-            if (CreateDiskPdo(Fdo, Disk))
+            NewPdo = IsScsi ? CreateScsiPdo(Fdo, (PVOID)((ULONG_PTR)Disk & ~(ULONG_PTR)1)) : CreateDiskPdo(Fdo, Disk);
+            if (NewPdo)
             {
                 DbgPrint("LKPI: disk %lu registered with PnP\n", Fdo->Count - 1);
                 IoInvalidateDeviceRelations(Fdo->Lower, BusRelations);
@@ -361,6 +520,19 @@ VOID LkpiDiskTryHook(VOID)
     BlkLbs = (PFN_LBS)LkpiLookupModuleSymbol("kpi_blk_lbs");
     if (!SetHook || !BlkSubmit || !BlkFlush || !BlkCapacity || !BlkLbs) { BlkSubmit = NULL; return; }
     SetHook(LkDiskHook);
+    {
+        PFN_SETHOOK SetScsiHook = (PFN_SETHOOK)LkpiLookupModuleSymbol("kpi_scsi_set_hook");
+
+        ScsiSubmit = (PFN_SCSI_SUBMIT)LkpiLookupModuleSymbol("kpi_scsi_submit");
+        SdevType = (PFN_SDEV_INT)LkpiLookupModuleSymbol("kpi_scsi_dev_type");
+        SdevRemovable = (PFN_SDEV_INT)LkpiLookupModuleSymbol("kpi_scsi_dev_removable");
+        SdevVendor = (PFN_SDEV_STR)LkpiLookupModuleSymbol("kpi_scsi_dev_vendor");
+        SdevModel = (PFN_SDEV_STR)LkpiLookupModuleSymbol("kpi_scsi_dev_model");
+        SdevRev = (PFN_SDEV_STR)LkpiLookupModuleSymbol("kpi_scsi_dev_rev");
+        SdevMaxBytes = (PFN_SDEV_ULONG)LkpiLookupModuleSymbol("kpi_scsi_dev_max_bytes");
+        if (SetScsiHook && ScsiSubmit && SdevType && SdevRemovable && SdevVendor && SdevModel && SdevRev && SdevMaxBytes)
+            SetScsiHook((void (LX_ABI *)(void *, int))LkScsiHook);
+    }
 }
 
 /* ---- PnP ----------------------------------------------------------------------------------------------- */
@@ -597,6 +769,17 @@ NTSTATUS NTAPI LkDiskScsi(PDEVICE_OBJECT Dev, PIRP Irp)
         default:
             SrbDone(Irp, Srb, SRB_STATUS_INVALID_REQUEST, 0);
             return STATUS_SUCCESS;
+    }
+
+    if (Pdo->Scsi)
+    {
+        KIRQL Old;
+        IoMarkIrpPending(Irp);
+        KeAcquireSpinLock(&WorkLock, &Old);
+        InsertTailList(&IoQueue, &Irp->Tail.Overlay.ListEntry);
+        KeReleaseSpinLock(&WorkLock, Old);
+        KeSetEvent(&WorkEvent, IO_NO_INCREMENT, FALSE);
+        return STATUS_PENDING;
     }
 
     Cdb = Srb->Cdb;

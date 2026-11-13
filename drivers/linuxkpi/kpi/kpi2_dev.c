@@ -52,7 +52,9 @@ const struct bus_type platform_bus_type = { .name = "platform" };
 const struct bus_type pci_bus_type = { .name = "pci" };
 const struct kernel_param_ops param_ops_int, param_ops_bool, param_ops_ulong;
 struct static_key_false hugetlb_optimize_vmemmap_key;
-unsigned long page_offset_base, vmemmap_base, phys_base;       /* see README: the memory layer defines these */
+/* page_offset_base, vmemmap_base, phys_base are defined in kpi_core.c (kpi.ko is loaded first and its own code, e.g.
+ * lib/scatterlist.c, needs them to resolve to real variables, not to a load-time trap stub) */
+extern unsigned long page_offset_base, vmemmap_base, phys_base;
 unsigned long __default_kernel_pte_mask = ~0UL;
 kmem_buckets kmalloc_caches[NR_KMALLOC_TYPES];
 

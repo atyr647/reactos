@@ -241,6 +241,9 @@ LkpiLoadModuleEx(PCUNICODE_STRING Path, const UCHAR *Data, ULONG DataSize, PLKPI
         if (!(Sh[i].sh_flags & SHF_ALLOC)) continue;
         Off = ALIGN_UP_BY(Off, max(Sh[i].sh_addralign, 1));
         M->SecBase[i] = M->Region + Off;
+#ifdef LKPI_DEBUG_SECTIONS   /* section load addresses: lets tools/symres.py map a crash address to a Linux function */
+        DbgPrint("LKPI:   sec %u %s at %p size %lx\n", i, (const char *)(M->Image + Sh[Eh->e_shstrndx].sh_offset) + Sh[i].sh_name, M->SecBase[i], (ULONG)Sh[i].sh_size);
+#endif
         if (Sh[i].sh_type != SHT_NOBITS) RtlCopyMemory(M->SecBase[i], M->Image + Sh[i].sh_offset, (SIZE_T)Sh[i].sh_size);
         Off += (SIZE_T)Sh[i].sh_size;
     }

@@ -222,3 +222,17 @@ no MSI-X, 128 KiB max transfer, a single LUN per disk, disk name always "NVMe di
   `pci_irq_vector`, `pci_request_irq`, `pci_free_irq[_vectors]`; INTx is disabled while MSI is on.
 Verified in QEMU: NVMe (1 admin + 2 queue vectors) and xHCI use MSI-X; disk mount/write and USB keyboard still work.
 Limits: all vectors target the boot CPU, 60 slots, no multi-message MSI, no per-vector masking from the driver.
+
+## Milestone: USB mass storage (Linux usb-storage) as ReactOS disks
+`kpi/kpi6_scsi.c` is a minimal SCSI mid-layer (hosts, LUN scan with INQUIRY, `scsi_cmnd`/scatterlist construction,
+`scsi_eh_prep/restore_cmnd`, sense helpers, deferred `scsi_done`). There is no sd/sr: every direct-access `scsi_device`
+is reported to `lkpidisk.c`, which exposes it as a disk PDO and **passes SRB CDBs straight through**
+(`kpi_scsi_submit`), copying sense data back as autosense. Verified in QEMU (`-device usb-storage` on the xHCI): the
+FAT32 stick appears as a drive letter and a file on it can be read.
+
+Bugs found: `kpi.ko` and `kpi2.ko` each defined `page_offset_base`/`vmemmap_base` (only kpi2's copy was set, so
+`sg_init_one()` in kpi.ko built garbage pages) -> one shared copy now; `usb-storage` calls `scsi_done()` before it clears its
+in-flight command (completion is now deferred to a worker, and submit retries while the host is busy); a NULL
+`system_freezable_wq`. `kpi/symres.py` maps a crash address to a Linux function (needs `-DLKPI_DEBUG_SECTIONS`).
+Limits: direct-access devices only (no CD-ROM/optical, no UAS), 64 KiB max transfer, no hot-unplug, and USB enumeration is
+asynchronous so a USB boot device may not be present by the time the boot partition is needed.
