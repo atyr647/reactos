@@ -364,9 +364,7 @@ int pcie_capability_clear_and_set_word_unlocked(struct pci_dev *dev, int pos, u1
 	return pci_write_config_word(dev, base + pos, v);
 }
 int pcie_capability_clear_and_set_word_locked(struct pci_dev *dev, int pos, u16 clear, u16 set) { return pcie_capability_clear_and_set_word_unlocked(dev, pos, clear, set); }
-int pci_alloc_irq_vectors(struct pci_dev *dev, unsigned int min_vecs, unsigned int max_vecs, unsigned int flags) { return 1; }
-void pci_free_irq_vectors(struct pci_dev *dev) { }
-int pci_irq_vector(struct pci_dev *dev, unsigned int nr) { return dev->irq; }
+/* pci_alloc_irq_vectors / pci_free_irq_vectors / pci_irq_vector: see kpi5_msi.c */
 void pci_assign_unassigned_bus_resources(struct pci_bus *bus) { }
 struct resource *pci_bus_resource_n(const struct pci_bus *bus, int n) { return NULL; }
 bool pci_device_is_present(struct pci_dev *pdev) { u16 v; return !pci_read_config_word(pdev, 0, &v) && v != 0xffff; }

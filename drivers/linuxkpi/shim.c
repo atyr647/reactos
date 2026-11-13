@@ -363,6 +363,35 @@ static BOOLEAN NTAPI LkpiIsr(PKINTERRUPT Interrupt, PVOID Ctx)
     return R != 0;
 }
 
+/* Message-signaled interrupts. Linux irq numbers >= LKPI_MSI_IRQ_BASE name an MSI vector slot; the APIC HAL
+ * (hal/halx86/apic/apic.c) maps slot n to a free IDT vector via the synthetic "bus level" HALP_MSI_IRQ_BASE + n. */
+#define LKPI_MSI_IRQ_BASE 0x1000
+#define LKPI_MSI_HAL_BASE 0xC0
+#define LKPI_MSI_SLOTS 60
+static LONG LkpiMsiNext;
+
+/* Allocate a slot and return the message the device must send: *Addr (0xFEExxxxx) and *Data (the vector). */
+int LX_ABI nt_msi_alloc(unsigned long long *Addr, unsigned int *Data)
+{
+    LONG Slot = InterlockedIncrement(&LkpiMsiNext) - 1;
+    ULONG Vector, Apic;
+    KIRQL Irql;
+    KAFFINITY Affinity;
+    int Cpuid[4];
+
+    if (Slot >= LKPI_MSI_SLOTS) return -1;
+    Vector = HalGetInterruptVector(Internal, 0, LKPI_MSI_HAL_BASE + Slot, LKPI_MSI_HAL_BASE + Slot, &Irql, &Affinity);
+    if (!Vector) return -1;
+    /* the interrupt is connected on the boot CPU (Affinity), so aim the message at that CPU's APIC id */
+    KeSetSystemAffinityThread(1);
+    __cpuid(Cpuid, 1);
+    KeRevertToUserAffinityThread();
+    Apic = ((ULONG)Cpuid[1] >> 24) & 0xFF;
+    *Addr = 0xFEE00000ULL | ((ULONGLONG)Apic << 12);
+    *Data = Vector;                       /* fixed delivery, edge, assert */
+    return LKPI_MSI_IRQ_BASE + Slot;
+}
+
 void * LX_ABI nt_irq_connect(int Irq, int (LX_ABI *Handler)(int, void *), int (LX_ABI *Thread)(int, void *), void *Dev, int Shared)
 {
     LKPI_IRQ *Q = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Q), LKPI_TAG);
@@ -375,6 +404,20 @@ void * LX_ABI nt_irq_connect(int Irq, int (LX_ABI *Handler)(int, void *), int (L
     RtlZeroMemory(Q, sizeof(*Q));
     Q->Irq = Irq; Q->Dev = Dev; Q->Handler = Handler; Q->Thread = Thread;
     KeInitializeDpc(&Q->Dpc, LkpiIrqDpc, Q);
+    if (Irq >= LKPI_MSI_IRQ_BASE)
+    {
+        ULONG Level = LKPI_MSI_HAL_BASE + (Irq - LKPI_MSI_IRQ_BASE);
+        Vector = HalGetInterruptVector(Internal, 0, Level, Level, &Irql, &Affinity);
+        if (Vector)
+        {
+            Status = IoConnectInterrupt(&Q->Obj, LkpiIsr, Q, NULL, Vector, Irql, Irql, Latched, FALSE, Affinity, FALSE);
+            if (!NT_SUCCESS(Status)) { DbgPrint("LKPI: MSI IoConnectInterrupt failed %08lx\n", Status); ExFreePoolWithTag(Q, LKPI_TAG); return NULL; }
+            DbgPrint("LKPI: MSI slot %d connected (vector %lu, irql %u)\n", Irq - LKPI_MSI_IRQ_BASE, Vector, (unsigned)Irql);
+            return Q;
+        }
+        ExFreePoolWithTag(Q, LKPI_TAG);
+        return NULL;
+    }
     Vector = HalGetInterruptVector(PCIBus, 0, (ULONG)Irq, (ULONG)Irq, &Irql, &Affinity);
     if (!Vector)
     {
@@ -534,6 +577,7 @@ const LKPI_EXPORT LkpiExports[] =
     { "nt_pci_cfg_read", (PVOID)nt_pci_cfg_read },
     { "nt_pci_cfg_write", (PVOID)nt_pci_cfg_write },
     { "nt_irq_connect", (PVOID)nt_irq_connect },
+    { "nt_msi_alloc", (PVOID)nt_msi_alloc },
     { "nt_irq_disconnect", (PVOID)nt_irq_disconnect },
     { "nt_read_firmware", (PVOID)nt_read_firmware },
     { "nt_current_tid", (PVOID)nt_current_tid },

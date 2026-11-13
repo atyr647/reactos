@@ -665,17 +665,7 @@ static int kpi_param_get_byte(char *buffer, const struct kernel_param *kp) { ret
 const struct kernel_param_ops param_ops_byte = { .set = kpi_param_set_byte, .get = kpi_param_get_byte };
 
 /* PCI: legacy INTx is the only interrupt type for now: one vector, the device's irq line */
-int pci_alloc_irq_vectors_affinity(struct pci_dev *dev, unsigned int min_vecs, unsigned int max_vecs, unsigned int flags, struct irq_affinity *affd)
-{
-	if (min_vecs > 1)
-		return -ENOSPC;
-	return 1;
-}
-int pci_request_irq(struct pci_dev *dev, unsigned int nr, irq_handler_t handler, irq_handler_t thread_fn, void *dev_id, const char *fmt, ...)
-{
-	return request_threaded_irq(dev->irq, handler, thread_fn, IRQF_SHARED, "pci", dev_id);
-}
-void pci_free_irq(struct pci_dev *dev, unsigned int nr, void *dev_id) { free_irq(dev->irq, dev_id); }
+/* pci_alloc_irq_vectors_affinity / pci_request_irq / pci_free_irq: see kpi5_msi.c */
 int pci_request_selected_regions(struct pci_dev *pdev, int bars, const char *name) { return 0; }
 void pci_release_selected_regions(struct pci_dev *pdev, int bars) { }
 int pci_select_bars(struct pci_dev *dev, unsigned long flags)

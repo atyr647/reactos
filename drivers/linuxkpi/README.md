@@ -212,3 +212,13 @@ no MSI-X, 128 KiB max transfer, a single LUN per disk, disk name always "NVMe di
   Verified from scratch locally; the CI workflow `x64-live-iso.yml` runs it and caches the result.
 * With modules on the CD the service is registered with Start=1 (`linuxkpi_reg_boot.inf`); boot option `/NOLINUXKPI`
   (menu entry "without Linux drivers") makes DriverEntry return immediately.
+
+## Milestone: MSI / MSI-X
+* HAL (`hal/halx86/apic/apic.c`): `HalGetInterruptVector()` for a synthetic bus level in [0xC0, 0xFE) allocates a free
+  IDT vector without an I/O APIC pin; `HalEnableSystemInterrupt/HalDisableSystemInterrupt` do nothing for those.
+* Host: `nt_msi_alloc()` returns the MSI message (0xFEE00000 | boot-CPU APIC id << 12, data = vector); `nt_irq_connect()`
+  accepts irq numbers >= 0x1000 as MSI slots (edge, non-shared).
+* `kpi/kpi5_msi.c`: real `pci_alloc_irq_vectors[_affinity]` (MSI-X table programmed through the BAR, or MSI capability),
+  `pci_irq_vector`, `pci_request_irq`, `pci_free_irq[_vectors]`; INTx is disabled while MSI is on.
+Verified in QEMU: NVMe (1 admin + 2 queue vectors) and xHCI use MSI-X; disk mount/write and USB keyboard still work.
+Limits: all vectors target the boot CPU, 60 slots, no multi-message MSI, no per-vector masking from the driver.
