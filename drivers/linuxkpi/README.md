@@ -141,9 +141,34 @@ because the IRP runs in the caller's context (no fault recovery yet: a bad user 
     CREATE_DUMB 800x600x32 -> handle 1, pitch 3200, size 1921024
     MAP_DUMB             -> offset 0x100000000
 
-Still missing for user-mode graphics: `mmap` of GEM objects into the caller (map the BO's pages/VRAM with an MDL in
-`IRP_MJ_DEVICE_CONTROL`, or a dedicated `IOCTL_LKPI_DRM_MMAP`), fault recovery for user pointers (`__put_user`/
-`copy_to_user` exception fixups), a `libdrm` shim (`drmOpen`, `drmIoctl`, `drmMap`, ...) and a Mesa winsys for it.
+Still missing for user-mode graphics: a `libdrm` shim (`drmOpen`, `drmIoctl`, `drmMap`, ...) and a Mesa winsys for it.
+(Bad user pointers in ioctl arguments are now caught: `nt_copy_user` returns `-EFAULT`.)
+
+## Milestone: DRM buffers mapped into user mode (`IOCTL_LKPI_DRM_MMAP`)
+`DeviceIoControl(IOCTL_LKPI_DRM_MMAP, {Offset, Size})` maps the buffer behind a fake mmap offset (from
+`DRM_IOCTL_MODE_MAP_DUMB`, `DRM_IOCTL_AMDGPU_GEM_MMAP`, ...) into the calling process; `IOCTL_LKPI_DRM_MUNMAP`
+(Address), closing the handle or the process exiting removes it. There are no Linux page tables, so `kpi2_drm.c` runs
+the driver's real `f_op->mmap` on a vm_area_struct that is never installed and calls its `vm_ops->fault` for every page,
+recording the frames and caching (PAT bits) the driver passes to `vmf_insert_pfn_prot()`. The host (`drmdev.c`) builds
+an MDL from those frames and maps it with `MmMapLockedPagesSpecifyCache(UserMode)`: placement, caching
+(write-combined for VRAM) and access checks stay the driver's decisions.
+
+Buffers move (a dumb buffer goes to VRAM when it is scanned out; amdgpu evicts to system memory). TTM announces a move
+with `unmap_mapping_range()`; that queues a refresh which faults the pages again after the move and repoints the user
+PTEs in place with a new kernel call, `MmReplaceLockedPagesInUserSpace()` (`ntoskrnl/mm/ARM3/mdlsup.c`: each PTE goes
+from valid to valid in one 64-bit store, then a TLB flush), so the address a program holds stays valid. System-memory
+pages a process still maps are not handed out again until the mapping lets go (`kpi_page_umap_get/put`), so a write
+that races with a move cannot land in someone else's page. A process-exit notify routine removes mappings whose
+process exits while another process still holds the handle.
+
+`drmkms` (QEMU, bochs): create a 1280x800 dumb buffer, map it (4,096,000 bytes), draw and read back with 0 mismatches,
+set the mode on it (the buffer moves to VRAM), draw a checkerboard through the same pointer and read it back with 0
+mismatches; a QEMU screendump of the display shows the checkerboard. Unmap leaves the range `MEM_FREE`; exiting with
+the buffer mapped, also while a child process holds the handle, leaves no trace and a second run passes.
+
+Kernel bugs fixed on the way (upstream ReactOS): `MiIsPteOnPdeBoundary(PointerPte + 1)` expanded to
+`(ULONG_PTR)PointerPte + 1` (one byte, not one PTE), so unmapping any user MDL mapping that owned a whole page table
+asserted; `VirtualQuery` asserted on device-memory VADs (`VadDevicePhysicalMemory`).
 
 ## Milestone: Linux USB stack (xHCI + usbcore + HID) running
 

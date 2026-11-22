@@ -814,6 +814,7 @@
 @ stdcall MmProtectMdlSystemAddress(ptr long)
 @ stdcall MmQuerySystemSize()
 @ stdcall MmRemovePhysicalMemory(ptr ptr)
+@ stdcall MmReplaceLockedPagesInUserSpace(ptr ptr long)
 @ stdcall MmResetDriverPaging(ptr)
 @ extern MmSectionObjectType
 @ stdcall MmSecureVirtualMemory(ptr long long)

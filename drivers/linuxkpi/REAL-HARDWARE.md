@@ -90,7 +90,9 @@ first: the GPU group waits up to 20 s for it so that the driver's first lines ar
 
 What is in place: PCI probe, BARs, MSI/MSI-X, firmware loading, VBIOS from the ACPI VFCT table (the HAL now hands ACPI
 tables to drivers; the log says whether VFCT is present) or the ROM BAR, DRM device nodes for user mode
-(`\\.\LKPIDRM0`, size- and pointer-checked ioctls).
+(`\\.\LKPIDRM0`, size- and pointer-checked ioctls), and mapping GPU buffers into a program (`IOCTL_LKPI_DRM_MMAP`,
+VRAM write-combined; the mapping follows the buffer when the driver moves it between VRAM and system memory). The
+mapping path is verified with bochs in QEMU, not with amdgpu.
 
 What is not: the display core (DC) is not built, so amdgpu cannot drive a monitor; the screen stays on the UEFI
 framebuffer (if amdgpu's init disturbs it, the screen may go dark: that is what the USB log is for). There is no

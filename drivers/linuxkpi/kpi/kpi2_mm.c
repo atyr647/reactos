@@ -46,6 +46,8 @@ static unsigned long region_pa, region_size, region_pfn0, region_pages;
 static void *region_va;
 static struct page *page_array;
 static unsigned long *page_bitmap;           /* 1 = used */
+static unsigned int *page_umaps;            /* user mappings (kpi2_drm.c) per page */
+static unsigned long *page_pending;         /* freed while mapped: back to the allocator when the last mapping goes */
 static DEFINE_SPINLOCK(page_lock);
 
 struct cpuinfo_x86 boot_cpu_data = { .x86_phys_bits = 48, .x86_virt_bits = 48, .x86_cache_alignment = 64, .x86_clflush_size = 64 };
@@ -67,7 +69,9 @@ int kpi_mm_init(void)
 	page_offset_base = (unsigned long)region_va - region_pa;
 	page_array = vzalloc(region_pages * sizeof(struct page));
 	page_bitmap = vzalloc(BITS_TO_LONGS(region_pages) * sizeof(long));
-	if (!page_array || !page_bitmap)
+	page_umaps = vzalloc(region_pages * sizeof(*page_umaps));
+	page_pending = vzalloc(BITS_TO_LONGS(region_pages) * sizeof(long));
+	if (!page_array || !page_bitmap || !page_umaps || !page_pending)
 		return -ENOMEM;
 	vmemmap_base = (unsigned long)page_array - region_pfn0 * sizeof(struct page);
 	for (i = 0; i < region_pages; i++)
@@ -110,6 +114,11 @@ struct page *__alloc_pages_noprof(gfp_t gfp, unsigned int order, int nid, nodema
 	return page;
 }
 
+/*
+ * A page a user process still maps (a DRM buffer's system-memory page, see kpi2_drm.c) is not handed out again when
+ * its owner frees it: Linux would have zapped the user's PTEs first and made the next access wait for the buffer,
+ * here the mapping is repointed afterwards, so a write in between must land in a page nobody else owns.
+ */
 void __free_pages(struct page *page, unsigned int order)
 {
 	unsigned long start = page - page_array, n = 1UL << order, i, flags;
@@ -117,8 +126,37 @@ void __free_pages(struct page *page, unsigned int order)
 	if (!page)
 		return;
 	spin_lock_irqsave(&page_lock, flags);
-	for (i = 0; i < n; i++)
-		__clear_bit(start + i, page_bitmap);
+	for (i = 0; i < n; i++) {
+		if (page_umaps[start + i])
+			__set_bit(start + i, page_pending);
+		else
+			__clear_bit(start + i, page_bitmap);
+	}
+	spin_unlock_irqrestore(&page_lock, flags);
+}
+
+/* Count a user mapping of this page frame (no-op for frames outside the region: VRAM, MMIO) */
+void kpi_page_umap_get(unsigned long pfn)
+{
+	unsigned long idx = pfn - region_pfn0, flags;
+
+	if (pfn < region_pfn0 || idx >= region_pages)
+		return;
+	spin_lock_irqsave(&page_lock, flags);
+	page_umaps[idx]++;
+	spin_unlock_irqrestore(&page_lock, flags);
+}
+
+void kpi_page_umap_put(unsigned long pfn)
+{
+	unsigned long idx = pfn - region_pfn0, flags;
+
+	if (pfn < region_pfn0 || idx >= region_pages)
+		return;
+	spin_lock_irqsave(&page_lock, flags);
+	WARN_ON_ONCE(!page_umaps[idx]);
+	if (page_umaps[idx] && !--page_umaps[idx] && __test_and_clear_bit(idx, page_pending))
+		__clear_bit(idx, page_bitmap);
 	spin_unlock_irqrestore(&page_lock, flags);
 }
 
@@ -157,9 +195,12 @@ __asm__(".globl rep_stos_alternative\n"
 int set_pages_array_wc(struct page **pages, int addrinarray) { return 0; }
 int set_pages_array_uc(struct page **pages, int addrinarray) { return 0; }
 int set_pages_wb(struct page *page, int numpages) { return 0; }
-pgprot_t pgprot_writecombine(pgprot_t prot) { return prot; }
+pgprot_t pgprot_writecombine(pgprot_t prot)
+{
+	return __pgprot((pgprot_val(prot) & ~(_PAGE_PWT | _PAGE_PCD | _PAGE_PAT)) | cachemode2protval(_PAGE_CACHE_MODE_WC));
+}
 pgprot_t vm_get_page_prot(unsigned long vm_flags) { return __pgprot(0); }
-vm_fault_t vmf_insert_pfn_prot(struct vm_area_struct *vma, unsigned long addr, unsigned long pfn, pgprot_t pgprot) { return VM_FAULT_SIGBUS; }
+/* vmf_insert_pfn_prot(): kpi2_drm.c (user mappings of DRM buffers) */
 
 /* ---- vmap: contiguous runs use the direct map, everything else an MDL mapping ------------------ */
 struct kpi_vmap {

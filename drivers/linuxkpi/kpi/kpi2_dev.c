@@ -512,7 +512,7 @@ struct file *shmem_file_setup(const char *name, loff_t size, unsigned long flags
 	f->f_mapping = &inode->i_data;
 	return f;
 }
-void unmap_mapping_range(struct address_space *mapping, loff_t const holebegin, loff_t const holelen, int even_cows) { }
+/* unmap_mapping_range(): kpi2_drm.c (user mappings of DRM buffers follow buffer moves) */
 
 /* ---- firmware framebuffer / aperture, i2c, acpi, hdmi, components, video: nothing to do --------- */
 int aperture_remove_conflicting_devices(resource_size_t base, resource_size_t size, const char *name) { return 0; }
@@ -531,8 +531,20 @@ char *video_get_options(const char *name) { return NULL; }
 struct backlight_device *devm_of_find_backlight(struct device *dev) { return NULL; }
 int drm_get_panel_orientation_quirk(int width, int height) { return -1; }
 
-/* ---- page cache attribute bits: filled in properly by the memory layer (README: Still to do) ---- */
-unsigned long cachemode2protval(enum page_cache_mode pcm) { return 0; }
+/* ---- page cache attribute bits: Linux's x86 PAT layout (0 WB, 1 WC, 2 UC-, 3 UC, 5 WP, 7 WT), so that a pgprot
+ * carries the caching a driver asked for (kpi2_drm.c turns it into the NT cache type of a user mapping) ---------- */
+unsigned long cachemode2protval(enum page_cache_mode pcm)
+{
+	switch (pcm) {
+	case _PAGE_CACHE_MODE_WB: return 0;
+	case _PAGE_CACHE_MODE_WC: return _PAGE_PWT;
+	case _PAGE_CACHE_MODE_UC_MINUS: return _PAGE_PCD;
+	case _PAGE_CACHE_MODE_UC: return _PAGE_PCD | _PAGE_PWT;
+	case _PAGE_CACHE_MODE_WP: return _PAGE_PAT | _PAGE_PWT;
+	case _PAGE_CACHE_MODE_WT: return _PAGE_PAT | _PAGE_PCD | _PAGE_PWT;
+	default: return _PAGE_PCD | _PAGE_PWT;
+	}
+}
 
 /* ---- %pS symbol printing: no symbol table, print the address ---------------------------------- */
 int sprint_symbol(char *buffer, unsigned long address) { return scnprintf(buffer, 64, "0x%lx", address); }

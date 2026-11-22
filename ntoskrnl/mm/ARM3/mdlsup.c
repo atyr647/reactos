@@ -371,6 +371,81 @@ MiUnmapLockedPagesInUserSpace(
 /* PUBLIC FUNCTIONS ***********************************************************/
 
 /*
+ * ReactOS extension: point an existing user-mode mapping made by MmMapLockedPagesSpecifyCache(UserMode) at other page
+ * frames, keeping its address. For graphics drivers whose buffers move between VRAM and system memory: the CPU
+ * mapping a process holds must follow the buffer, as Linux does by refaulting. Every PTE goes from valid to valid in
+ * one 64-bit store (a concurrent access sees the old or the new page, never a hole), then the TLB is flushed.
+ * NewMdl must describe exactly as many pages as the mapping; the mapping must belong to the current process.
+ * The caller keeps the old pages alive until this returns.
+ */
+NTSTATUS
+NTAPI
+MmReplaceLockedPagesInUserSpace(
+    _In_ PVOID BaseAddress,
+    _In_ PMDL NewMdl,
+    _In_ MEMORY_CACHING_TYPE CacheType)
+{
+    PEPROCESS Process = PsGetCurrentProcess();
+    PETHREAD Thread = PsGetCurrentThread();
+    PMMVAD Vad;
+    PMMPTE PointerPte;
+    MMPTE TempPte;
+    PMMPFN Pfn;
+    PPFN_NUMBER MdlPages;
+    ULONG NumberOfPages, i;
+    MI_PFN_CACHE_ATTRIBUTE CacheAttribute, Effective;
+
+    if (KeGetCurrentIrql() > APC_LEVEL || CacheType > MmWriteCombined || PAGE_ALIGN(BaseAddress) != BaseAddress)
+        return STATUS_INVALID_PARAMETER;
+    NumberOfPages = ADDRESS_AND_SIZE_TO_SPAN_PAGES(MmGetMdlVirtualAddress(NewMdl), MmGetMdlByteCount(NewMdl));
+    MdlPages = MmGetMdlPfnArray(NewMdl);
+    CacheAttribute = MiPlatformCacheAttributes[(NewMdl->MdlFlags & MDL_IO_SPACE) != 0][CacheType];
+
+    MmLockAddressSpace(&Process->Vm);
+    Vad = MiLocateAddress(BaseAddress);
+    if (!Vad || Vad->u.VadFlags.VadType != VadDevicePhysicalMemory ||
+        Vad->StartingVpn != ((ULONG_PTR)BaseAddress >> PAGE_SHIFT) ||
+        Vad->EndingVpn - Vad->StartingVpn + 1 != NumberOfPages)
+    {
+        MmUnlockAddressSpace(&Process->Vm);
+        return STATUS_INVALID_PARAMETER;
+    }
+    MiLockProcessWorkingSetUnsafe(Process, Thread);
+
+    PointerPte = MiAddressToPte(BaseAddress);
+    for (i = 0; i < NumberOfPages; i++, PointerPte++)
+    {
+        ASSERT(PointerPte->u.Hard.Valid == 1);
+        MI_MAKE_HARDWARE_PTE_USER(&TempPte, PointerPte, MM_READWRITE, MdlPages[i]);
+
+        /* as when mapping: RAM pages keep the caching they already have elsewhere */
+        Effective = CacheAttribute;
+        Pfn = MiGetPfnEntry(MdlPages[i]);
+        if (Pfn && Pfn->u3.e1.CacheAttribute <= MiWriteCombined)
+            Effective = Pfn->u3.e1.CacheAttribute;
+        switch (Effective)
+        {
+            case MiNonCached:
+                MI_PAGE_DISABLE_CACHE(&TempPte);
+                MI_PAGE_WRITE_THROUGH(&TempPte);
+                break;
+            case MiWriteCombined:
+                MI_PAGE_DISABLE_CACHE(&TempPte);
+                MI_PAGE_WRITE_COMBINED(&TempPte);
+                break;
+            default:
+                break;
+        }
+        InterlockedExchange64((PLONG64)&PointerPte->u.Long, (LONG64)TempPte.u.Long);
+    }
+
+    KeFlushProcessTb();
+    MiUnlockProcessWorkingSetUnsafe(Process, Thread);
+    MmUnlockAddressSpace(&Process->Vm);
+    return STATUS_SUCCESS;
+}
+
+/*
  * @implemented
  */
 PMDL
