@@ -678,6 +678,47 @@ static VOID NTAPI LkpiTickDpcRoutine(PKDPC Dpc, PVOID Ctx, PVOID Arg1, PVOID Arg
     if (LkpiTickFn) LkpiTickFn();
 }
 
+/* ---- DPCs for Linux code that runs in softirq context (NAPI polls) ------------------------------------------ */
+typedef struct _LKPI_DPC
+{
+    KDPC Dpc;
+    void (LX_ABI *Fn)(void *);
+    void *Ctx;
+} LKPI_DPC, *PLKPI_DPC;
+
+static VOID NTAPI LkpiDpcRoutine(PKDPC Dpc, PVOID Ctx, PVOID A1, PVOID A2)
+{
+    PLKPI_DPC D = Ctx;
+
+    D->Fn(D->Ctx);
+}
+
+void * LX_ABI nt_dpc_alloc(void (LX_ABI *Fn)(void *), void *Ctx)
+{
+    PLKPI_DPC D = ExAllocatePoolWithTag(NonPagedPool, sizeof(*D), LKPI_TAG);
+
+    if (!D) return NULL;
+    D->Fn = Fn;
+    D->Ctx = Ctx;
+    KeInitializeDpc(&D->Dpc, LkpiDpcRoutine, D);
+    return D;
+}
+
+/* Any IRQL (also from an ISR). Returns 1 if queued, 0 if it already was. */
+int LX_ABI nt_dpc_queue(void *Handle)
+{
+    return Handle && KeInsertQueueDpc(&((PLKPI_DPC)Handle)->Dpc, NULL, NULL) ? 1 : 0;
+}
+
+/* Wall clock in nanoseconds since 1970 */
+unsigned long long LX_ABI nt_real_ns(void)
+{
+    LARGE_INTEGER Now;
+
+    KeQuerySystemTime(&Now);
+    return (unsigned long long)(Now.QuadPart - 116444736000000000LL) * 100;
+}
+
 void LX_ABI nt_register_tick(void (LX_ABI *Fn)(void))
 {
     LARGE_INTEGER Due;
@@ -717,6 +758,9 @@ const LKPI_EXPORT LkpiExports[] =
     { "nt_irq_connect", (PVOID)nt_irq_connect },
     { "nt_msi_alloc", (PVOID)nt_msi_alloc },
     { "nt_irq_disconnect", (PVOID)nt_irq_disconnect },
+    { "nt_dpc_alloc", (PVOID)nt_dpc_alloc },
+    { "nt_dpc_queue", (PVOID)nt_dpc_queue },
+    { "nt_real_ns", (PVOID)nt_real_ns },
     { "nt_read_firmware", (PVOID)nt_read_firmware },
     { "nt_current_tid", (PVOID)nt_current_tid },
     { "nt_raise_dispatch", (PVOID)nt_raise_dispatch },

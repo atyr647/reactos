@@ -17,6 +17,8 @@ extern void nt_dbgprint(const char *s);
 #define KPI_MAX_BUS 4
 
 static struct pci_bus *kpi_buses[KPI_MAX_BUS];
+/* the host bridge: every device has a parent in Linux (drivers look at dev.parent, e.g. pm_runtime_suspended()) */
+static struct device kpi_pci_root;
 
 static struct pci_bus *kpi_bus(unsigned int nr)
 {
@@ -24,6 +26,7 @@ static struct pci_bus *kpi_bus(unsigned int nr)
 		kpi_buses[nr] = kzalloc(sizeof(struct pci_bus), GFP_KERNEL);
 		if (kpi_buses[nr]) {
 			kpi_buses[nr]->number = nr;
+			kpi_buses[nr]->bridge = &kpi_pci_root;
 			INIT_LIST_HEAD(&kpi_buses[nr]->devices);
 		}
 	}
@@ -81,7 +84,12 @@ static struct pci_dev *kpi_pci_make_dev(unsigned int bus, unsigned int devfn)
 	nt_pci_cfg_read(bus, devfn, 0x3c, 1, &v);
 	dev->irq = v;
 	dev->multifunction = 0;
+	if (!kpi_pci_root.kobj.name) {
+		device_initialize(&kpi_pci_root);
+		dev_set_name(&kpi_pci_root, "pci0000:00");
+	}
 	device_initialize(&dev->dev);
+	dev->dev.parent = &kpi_pci_root;
 	dev_set_name(&dev->dev, "%04x:%02x:%02x.%d", 0, bus, devfn >> 3, devfn & 7);
 	dev->dev.bus = &pci_bus_type;
 	dev->dma_mask = ~0ULL;

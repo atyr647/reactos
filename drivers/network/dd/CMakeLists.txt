@@ -1,6 +1,9 @@
 
 add_subdirectory(dc21x4)
 add_subdirectory(e1000)
+if(ARCH STREQUAL "amd64")
+    add_subdirectory(lkpinet)
+endif()
 add_subdirectory(ne2000)
 add_subdirectory(netkvm)
 if(ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64")

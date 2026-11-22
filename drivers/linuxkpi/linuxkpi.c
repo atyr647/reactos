@@ -9,7 +9,7 @@
 #ifndef LKPI_MODULE_COUNT
 #define LKPI_MODULE_COUNT 0
 #endif
-#define LKPI_MAX_MODULES 16
+#define LKPI_MAX_MODULES 32
 
 static PLKPI_MODULE LkpiModules[LKPI_MAX_MODULES];
 static ULONG LkpiModuleCount;

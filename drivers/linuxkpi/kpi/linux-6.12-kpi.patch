@@ -30,3 +30,37 @@
  }
  
  void copy_page(void *to, void *from);
+--- a/arch/x86/include/asm/alternative.h	2024-11-17 22:15:08.000000000 +0000
++++ b/arch/x86/include/asm/alternative.h	2024-11-17 22:15:08.000000000 +0000
+@@ -50,8 +50,9 @@
+ #define LOCK_PREFIX LOCK_PREFIX_HERE "\n\tlock; "
+ 
+ #else /* ! CONFIG_SMP */
++/* LinuxKPI: modules are built !SMP but run on every CPU of the host: atomic operations must stay locked */
+ #define LOCK_PREFIX_HERE ""
+-#define LOCK_PREFIX ""
++#define LOCK_PREFIX "\n\tlock; "
+ #endif
+ 
+ /*
+@@ -307,6 +308,7 @@
+ 	.endm
+ #else
+ 	.macro LOCK_PREFIX
++	lock	/* LinuxKPI: see LOCK_PREFIX above */
+ 	.endm
+ #endif
+ 
+--- a/include/asm-generic/barrier.h	2024-11-17 22:15:08.000000000 +0000
++++ b/include/asm-generic/barrier.h	2024-11-17 22:15:08.000000000 +0000
+@@ -109,8 +109,9 @@
+ 
+ #else	/* !CONFIG_SMP */
+ 
++/* LinuxKPI: built !SMP but run on several CPUs, so smp_mb() must order stores against later loads */
+ #ifndef smp_mb
+-#define smp_mb()	barrier()
++#define smp_mb()	__smp_mb()
+ #endif
+ 
+ #ifndef smp_rmb

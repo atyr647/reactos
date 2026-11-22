@@ -23,6 +23,8 @@ struct kpi_msi {
 	void __iomem *table;
 	unsigned long table_len;
 	u8 cap;
+	bool legacy;		/* enabled through pci_enable_msi()/pci_enable_msix_range(): dev->irq was replaced */
+	int intx_irq;		/* dev->irq before that */
 };
 static LIST_HEAD(kpi_msis);
 
@@ -198,6 +200,69 @@ void pci_free_irq_vectors(struct pci_dev *dev)
 	list_del(&m->entry);
 	kfree(m);
 }
+
+/* ---- the older interface (e1000e, igb, ...): dev->irq becomes the MSI vector ------------------------------------ */
+int pci_enable_msi(struct pci_dev *dev)
+{
+	int ret = pci_alloc_irq_vectors(dev, 1, 1, PCI_IRQ_MSI);
+	struct kpi_msi *m;
+
+	if (ret < 0)
+		return ret;
+	m = kpi_msi_find(dev);
+	m->legacy = true;
+	m->intx_irq = dev->irq;
+	dev->irq = m->irq[0];
+	dev->msi_enabled = 1;
+	return 0;
+}
+EXPORT_SYMBOL(pci_enable_msi);
+
+void pci_disable_msi(struct pci_dev *dev)
+{
+	struct kpi_msi *m = kpi_msi_find(dev);
+
+	if (!m || m->msix)
+		return;
+	dev->irq = m->intx_irq;
+	dev->msi_enabled = 0;
+	pci_free_irq_vectors(dev);
+}
+EXPORT_SYMBOL(pci_disable_msi);
+
+/* entries[i].entry must be i (all in-tree users ask for a dense table) */
+int pci_enable_msix_range(struct pci_dev *dev, struct msix_entry *entries, int minvec, int maxvec)
+{
+	struct kpi_msi *m;
+	int i, n;
+
+	for (i = 0; i < maxvec; i++)
+		if (entries[i].entry != i)
+			return -EINVAL;
+	if (kpi_msi_find(dev))
+		return -EINVAL;
+	n = kpi_try_msix(dev, minvec, maxvec);
+	if (n < 0)
+		return n;
+	m = kpi_msi_find(dev);
+	m->legacy = true;
+	for (i = 0; i < n; i++)
+		entries[i].vector = m->irq[i];
+	dev->msix_enabled = 1;
+	return n;
+}
+EXPORT_SYMBOL(pci_enable_msix_range);
+
+void pci_disable_msix(struct pci_dev *dev)
+{
+	struct kpi_msi *m = kpi_msi_find(dev);
+
+	if (!m || !m->msix)
+		return;
+	dev->msix_enabled = 0;
+	pci_free_irq_vectors(dev);
+}
+EXPORT_SYMBOL(pci_disable_msix);
 
 int pci_irq_vector(struct pci_dev *dev, unsigned int nr)
 {

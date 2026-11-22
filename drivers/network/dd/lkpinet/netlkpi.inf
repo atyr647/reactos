@@ -1,0 +1,65 @@
+; NETLKPI.INF
+
+; Ethernet adapters driven by Linux drivers inside the LinuxKPI host (linuxkpi.sys):
+; Realtek RTL8111/8168/8125 (r8169), Intel I225/I226 (igc), Intel 82574 and later (e1000e), Intel 82575/82576 (igb).
+
+[Version]
+Signature  = "$Windows NT$"
+LayoutFile = layout.inf
+Class      = Net
+ClassGUID  = {4D36E972-E325-11CE-BFC1-08002BE10318}
+Provider   = %ReactOS%
+DriverVer  = 11/22/2026,1.00
+
+[DestinationDirs]
+DefaultDestDir = 12
+
+[Manufacturer]
+%LinuxMfg% = LinuxMfg
+
+[LinuxMfg]
+%Lkpi_r8169.DeviceDesc%  = Lkpi_Inst.ndi,LKPI\NET_r8169
+%Lkpi_igc.DeviceDesc%    = Lkpi_Inst.ndi,LKPI\NET_igc
+%Lkpi_e1000e.DeviceDesc% = Lkpi_Inst.ndi,LKPI\NET_e1000e
+%Lkpi_igb.DeviceDesc%    = Lkpi_Inst.ndi,LKPI\NET_igb
+%Lkpi.DeviceDesc%        = Lkpi_Inst.ndi,LKPI\NET
+
+;----------------------------- LKPINET DRIVER -----------------------------
+
+[Lkpi_Inst.ndi.NT]
+Characteristics = 0x4 ; NCF_PHYSICAL
+BusType = 0 ; Internal
+AddReg = Lkpi_AddReg.NT
+CopyFiles = Lkpi_CopyFiles.NT
+
+[Lkpi_CopyFiles.NT]
+lkpinet.sys
+
+[Lkpi_AddReg.NT]
+HKR, Ndi,            Service,    0, "lkpinet"
+HKR, Ndi\Interfaces, UpperRange, 0, "ndis5"
+HKR, Ndi\Interfaces, LowerRange, 0, "ethernet"
+
+[Lkpi_Inst.ndi.NT.Services]
+AddService = lkpinet, 0x00000002, Lkpi_Service_Inst
+
+[Lkpi_Service_Inst]
+ServiceType   = 1
+StartType     = 3
+ErrorControl  = 0
+ServiceBinary = %12%\lkpinet.sys
+LoadOrderGroup = NDIS
+
+;-------------------------------- STRINGS -------------------------------
+
+[Strings]
+; Non-localizable
+ReactOS = "ReactOS Project"
+LinuxMfg = "Linux drivers (LinuxKPI)"
+
+; Localizable
+Lkpi_r8169.DeviceDesc  = "Realtek PCIe GbE/2.5GbE Family Controller (Linux r8169)"
+Lkpi_igc.DeviceDesc    = "Intel Ethernet Controller I225/I226 (Linux igc)"
+Lkpi_e1000e.DeviceDesc = "Intel PRO/1000 PCIe Network Connection (Linux e1000e)"
+Lkpi_igb.DeviceDesc    = "Intel Gigabit Network Connection (Linux igb)"
+Lkpi.DeviceDesc        = "Ethernet Adapter (Linux driver)"

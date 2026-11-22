@@ -11,6 +11,7 @@
  */
 
 #include "linuxkpi.h"
+#include "lkbus.h"
 #include <ntddscsi.h>
 #include <ntddstor.h>
 #include <scsi.h>
@@ -23,12 +24,6 @@
 static LONG TraceCount;
 #define LKDISK_TRACE(...) do { if (InterlockedIncrement(&TraceCount) < 3000) DbgPrint("LKDISK: " __VA_ARGS__); } while (0)
 
-typedef struct _LKDISK_COMMON
-{
-    BOOLEAN IsFdo;
-    PDEVICE_OBJECT Self;
-} LKDISK_COMMON;
-
 typedef struct _LKDISK_PDO LKDISK_PDO, *PLKDISK_PDO;
 
 typedef struct _LKDISK_FDO
@@ -37,6 +32,8 @@ typedef struct _LKDISK_FDO
     PDEVICE_OBJECT Lower;
     ULONG Count;
     PLKDISK_PDO Disks[LKDISK_MAX];
+    ULONG NetCount;
+    PDEVICE_OBJECT Nets[LKDISK_MAX];    /* network devices (netbus.c) */
 } LKDISK_FDO, *PLKDISK_FDO;
 
 struct _LKDISK_PDO
@@ -459,11 +456,24 @@ static VOID NTAPI DiskThread(PVOID Ctx)
 
         if (Disk)
         {
-            BOOLEAN IsScsi = ((ULONG_PTR)Disk & 1) != 0;
+            ULONG_PTR Tag = (ULONG_PTR)Disk & LKBUS_TAG_MASK;
+            PVOID Obj = (PVOID)((ULONG_PTR)Disk & ~(ULONG_PTR)LKBUS_TAG_MASK);
             PLKDISK_PDO NewPdo;
 
             if (!Fdo && !NT_SUCCESS(CreateFdo())) { InterlockedDecrement(&DiskPending); continue; }
-            NewPdo = IsScsi ? CreateScsiPdo(Fdo, (PVOID)((ULONG_PTR)Disk & ~(ULONG_PTR)1)) : CreateDiskPdo(Fdo, Disk);
+            if (Tag == LKBUS_TAG_NET)
+            {
+                PDEVICE_OBJECT NetPdo = Fdo->NetCount < LKDISK_MAX ? LkNetCreatePdo(DiskDriver, Obj) : NULL;
+
+                if (NetPdo)
+                {
+                    Fdo->Nets[Fdo->NetCount++] = NetPdo;
+                    IoInvalidateDeviceRelations(Fdo->Lower, BusRelations);
+                }
+                InterlockedDecrement(&DiskPending);
+                continue;
+            }
+            NewPdo = Tag == LKBUS_TAG_SCSI ? CreateScsiPdo(Fdo, Obj) : CreateDiskPdo(Fdo, Disk);
             if (NewPdo)
             {
                 DbgPrint("LKPI: disk %lu registered with PnP\n", Fdo->Count - 1);
@@ -482,16 +492,22 @@ static VOID NTAPI DiskThread(PVOID Ctx)
     }
 }
 
-/* Called by the Linux block layer (device_add_disk) from an arbitrary Linux context. */
-static void LX_ABI LkDiskHook(void *Gendisk, int Added)
+/* A new child (tagged pointer, see lkbus.h) for the bus thread. Any Linux context. */
+VOID LkBusQueueChild(PVOID Tagged)
 {
     KIRQL Old;
 
-    if (!Added || !DiskStarted) return;
+    if (!DiskStarted) return;
     KeAcquireSpinLock(&WorkLock, &Old);
-    if (NewDiskCount < LKDISK_MAX) { NewDisks[NewDiskCount++] = Gendisk; InterlockedIncrement(&DiskPending); }
+    if (NewDiskCount < LKDISK_MAX) { NewDisks[NewDiskCount++] = Tagged; InterlockedIncrement(&DiskPending); }
     KeReleaseSpinLock(&WorkLock, Old);
     KeSetEvent(&WorkEvent, IO_NO_INCREMENT, FALSE);
+}
+
+/* Called by the Linux block layer (device_add_disk) from an arbitrary Linux context. */
+static void LX_ABI LkDiskHook(void *Gendisk, int Added)
+{
+    if (Added) LkBusQueueChild(Gendisk);
 }
 
 VOID LkpiDiskInit(PDRIVER_OBJECT DriverObject)
@@ -525,6 +541,9 @@ VOID LkpiDiskWaitIdle(VOID)
 VOID LkpiDiskTryHook(VOID)
 {
     PFN_SETHOOK SetHook;
+
+    if (DiskStarted)
+        LkNetTryHook();
 
     if (BlkSubmit || !DiskStarted) return;
     SetHook = (PFN_SETHOOK)LkpiLookupModuleSymbol("kpi_blk_set_hook");
@@ -565,7 +584,7 @@ static NTSTATUS FdoPnp(PDEVICE_OBJECT Dev, PIRP Irp)
         case IRP_MN_QUERY_DEVICE_RELATIONS:
             if (Sp->Parameters.QueryDeviceRelations.Type == BusRelations)
             {
-                ULONG i, N = F->Count;
+                ULONG i, N = F->Count + F->NetCount;
                 PDEVICE_RELATIONS R = ExAllocatePoolWithTag(PagedPool, sizeof(DEVICE_RELATIONS) + sizeof(PDEVICE_OBJECT) * (N ? N : 1), LKDISK_TAG);
 
                 if (!R)
@@ -577,7 +596,7 @@ static NTSTATUS FdoPnp(PDEVICE_OBJECT Dev, PIRP Irp)
                 R->Count = N;
                 for (i = 0; i < N; i++)
                 {
-                    R->Objects[i] = F->Disks[i]->Common.Self;
+                    R->Objects[i] = i < F->Count ? F->Disks[i]->Common.Self : F->Nets[i - F->Count];
                     ObReferenceObject(R->Objects[i]);
                 }
                 Irp->IoStatus.Information = (ULONG_PTR)R;
@@ -722,7 +741,10 @@ static NTSTATUS PdoPnp(PDEVICE_OBJECT Dev, PIRP Irp)
 
 NTSTATUS NTAPI LkDiskPnp(PDEVICE_OBJECT Dev, PIRP Irp)
 {
-    return ((LKDISK_COMMON *)Dev->DeviceExtension)->IsFdo ? FdoPnp(Dev, Irp) : PdoPnp(Dev, Irp);
+    LKDISK_COMMON *C = Dev->DeviceExtension;
+
+    if (C->IsFdo) return FdoPnp(Dev, Irp);
+    return C->Kind == LKBUS_KIND_NET ? LkNetPdoPnp(Dev, Irp) : PdoPnp(Dev, Irp);
 }
 
 NTSTATUS NTAPI LkDiskPower(PDEVICE_OBJECT Dev, PIRP Irp)
@@ -760,13 +782,13 @@ NTSTATUS NTAPI LkDiskScsi(PDEVICE_OBJECT Dev, PIRP Irp)
     PSCSI_REQUEST_BLOCK Srb = Sp->Parameters.Scsi.Srb;
     PUCHAR Cdb;
 
-    LKDISK_TRACE("SCSI srb func %02x cdb %02x len %lu\n", Srb->Function, Srb->Cdb[0], Srb->DataTransferLength);
-    if (C->IsFdo)
+    if (C->IsFdo || C->Kind != LKBUS_KIND_DISK)
     {
         Irp->IoStatus.Status = STATUS_INVALID_DEVICE_REQUEST;
         IoCompleteRequest(Irp, IO_NO_INCREMENT);
         return STATUS_INVALID_DEVICE_REQUEST;
     }
+    LKDISK_TRACE("SCSI srb func %02x cdb %02x len %lu\n", Srb->Function, Srb->Cdb[0], Srb->DataTransferLength);
 
     switch (Srb->Function)
     {
@@ -898,6 +920,8 @@ NTSTATUS LkDiskControl(PDEVICE_OBJECT Dev, PIRP Irp)
     PVOID Buf = Irp->AssociatedIrp.SystemBuffer;
 
     LKDISK_TRACE("IOCTL %08lx fdo=%u\n", Sp->Parameters.DeviceIoControl.IoControlCode, C->IsFdo);
+    if (!C->IsFdo && C->Kind != LKBUS_KIND_DISK)
+        return Complete(Irp, STATUS_INVALID_DEVICE_REQUEST, 0);
     switch (Sp->Parameters.DeviceIoControl.IoControlCode)
     {
         case IOCTL_STORAGE_QUERY_PROPERTY:
@@ -990,5 +1014,6 @@ NTSTATUS LkDiskControl(PDEVICE_OBJECT Dev, PIRP Irp)
 
 BOOLEAN LkDiskOwns(PDEVICE_OBJECT Dev)
 {
-    return Dev->DeviceType == FILE_DEVICE_DISK || Dev->DeviceType == FILE_DEVICE_CONTROLLER;
+    return Dev->DeviceType == FILE_DEVICE_DISK || Dev->DeviceType == FILE_DEVICE_CONTROLLER ||
+           Dev->DeviceType == FILE_DEVICE_NETWORK;
 }
