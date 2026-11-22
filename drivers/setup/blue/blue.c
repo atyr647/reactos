@@ -563,12 +563,12 @@ ScrAcquireOwnership(
 
     if (ScrFb)
     {
-        /* Fixed 80x25 text screen painted into the framebuffer; keep the cursor where it was */
+        /* Fixed 80x36 text screen (640x480 with the 8x13 boot font) painted into the framebuffer; keep the cursor where it was */
         DeviceExtension->Columns = 80;
-        DeviceExtension->Rows = 25;
+        DeviceExtension->Rows = FB_MAX_ROWS;
         DeviceExtension->ScanLines = 16;
         DeviceExtension->CursorX = min(DeviceExtension->CursorX, (USHORT)79);
-        DeviceExtension->CursorY = min(DeviceExtension->CursorY, (USHORT)24);
+        DeviceExtension->CursorY = min(DeviceExtension->CursorY, (USHORT)(FB_MAX_ROWS - 1));
         return;
     }
 
