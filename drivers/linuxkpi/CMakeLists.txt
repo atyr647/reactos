@@ -2,6 +2,7 @@
 add_library(linuxkpi MODULE linuxkpi.c elfldr.c shim.c drmdev.c input.c lkpidisk.c linuxkpi.rc)
 set_module_type(linuxkpi kernelmodedriver)
 add_importlibs(linuxkpi ntoskrnl hal)
+target_link_libraries(linuxkpi ${PSEH_LIB})
 add_cd_file(TARGET linuxkpi DESTINATION reactos/system32/drivers NO_CAB FOR all)
 
 # Linux modules (cmake -DLKPI_MODULES="/path/kpi.ko;/path/kpi2.ko;...", in load order) are linked into

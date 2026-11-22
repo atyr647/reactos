@@ -143,7 +143,10 @@ RtlAcquireSRWLockShared(IN OUT PRTL_SRWLOCK SRWLock)
     if ((val & SRWLOCK_MASK_EXCLUSIVE_QUEUE) && !(val & SRWLOCK_MASK_IN_EXCLUSIVE))
     {
         NtWaitForKeyedEvent(NULL, srwlock_key_exclusive(SRWLock), FALSE, NULL);
-        val = srwlock_unlock_exclusive(SRW_STATE(SRWLock), SRWLOCK_RES_SHARED - SRWLOCK_RES_EXCLUSIVE);
+        /* The returned snapshot still counts this thread's own exclusive request, which the
+           update just converted: leave it out, or a waiter that no longer exists gets woken. */
+        val = srwlock_unlock_exclusive(SRW_STATE(SRWLock), SRWLOCK_RES_SHARED - SRWLOCK_RES_EXCLUSIVE)
+              - SRWLOCK_RES_EXCLUSIVE;
         srwlock_leave_exclusive(SRWLock, val);
     }
 

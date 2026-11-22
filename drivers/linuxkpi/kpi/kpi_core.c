@@ -131,9 +131,17 @@ void kvfree(const void *p) { if (p) nt_free((void *)p); }
 void vfree(const void *p) { if (p) nt_free((void *)p); }
 void kfree_sensitive(const void *p) { if (p) nt_free((void *)p); }
 
-/* ---- uaccess: user and kernel space are the same for now ---------------------------------- */
-unsigned long _copy_from_user(void *to, const void __user *from, unsigned long n) { memcpy(to, (const void __force *)from, n); return 0; }
-unsigned long _copy_to_user(void __user *to, const void *from, unsigned long n) { memcpy((void __force *)to, from, n); return 0; }
+/* ---- uaccess: the host checks every user pointer (its captured ioctl argument, or probed memory of the caller) ---- */
+extern unsigned long nt_copy_user(void *dst, const void *src, unsigned long n, int to_user);
+unsigned long _copy_from_user(void *to, const void __user *from, unsigned long n)
+{
+	unsigned long left = nt_copy_user(to, (const void __force *)from, n, 0);
+
+	if (left)
+		memset(to + (n - left), 0, left);	/* like lib/usercopy.c: never hand back stale kernel data */
+	return left;
+}
+unsigned long _copy_to_user(void __user *to, const void *from, unsigned long n) { return nt_copy_user((void __force *)to, from, n, 1); }
 void __copy_overflow(int size, unsigned long count) { nt_dbgprint("copy_overflow\n"); }
 
 /* ---- spinlocks -------------------------------------------------------------------------- */

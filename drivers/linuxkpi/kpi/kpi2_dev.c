@@ -90,16 +90,41 @@ u64 nsecs_to_jiffies64(u64 n) { return n / (NSEC_PER_SEC / HZ); }
 bool is_vmalloc_addr(const void *x) { return false; }
 loff_t noop_llseek(struct file *file, loff_t offset, int whence) { return file->f_pos; }
 void si_meminfo(struct sysinfo *val) { memset(val, 0, sizeof(*val)); val->totalram = 1UL << 20; val->freeram = 1UL << 19; val->mem_unit = 4096; }
-/* get_user()/put_user() helpers with the x86-64 kernel convention: address in %rax (get) / %rcx (put), value in %rdx (get result)
- * or %rax (put value), error code in %eax. User and kernel addresses are the same here. */
-__asm__(".globl __get_user_1\n__get_user_1:\n\tmovzbl (%rax),%edx\n\txor %eax,%eax\n\tret\n"
-	".globl __get_user_2\n__get_user_2:\n\tmovzwl (%rax),%edx\n\txor %eax,%eax\n\tret\n"
-	".globl __get_user_4\n__get_user_4:\n\tmovl (%rax),%edx\n\txor %eax,%eax\n\tret\n"
-	".globl __get_user_8\n__get_user_8:\n\tmovq (%rax),%rdx\n\txor %eax,%eax\n\tret\n"
-	".globl __put_user_1\n__put_user_1:\n\tmovb %al,(%rcx)\n\txor %ecx,%ecx\n\txor %eax,%eax\n\tret\n"
-	".globl __put_user_2\n__put_user_2:\n\tmovw %ax,(%rcx)\n\txor %ecx,%ecx\n\txor %eax,%eax\n\tret\n"
-	".globl __put_user_4\n__put_user_4:\n\tmovl %eax,(%rcx)\n\txor %ecx,%ecx\n\txor %eax,%eax\n\tret\n"
-	".globl __put_user_8\n__put_user_8:\n\tmovq %rax,(%rcx)\n\txor %ecx,%ecx\n\txor %eax,%eax\n\tret\n");
+/*
+ * get_user()/put_user() with the x86-64 kernel calling convention (arch/x86/lib/getuser.S, putuser.S):
+ *   __get_user_N: address in %rax; error (0 / -EFAULT) in %rax, zero-extended value in %rdx; all else preserved.
+ *   __put_user_N: value in %rax, address in %rcx; error in %ecx; only %rbx may be clobbered.
+ * Both go through _copy_from_user/_copy_to_user, so they get the host's user-pointer checks.
+ */
+unsigned long kpi_get_user(const void __user *p, unsigned long size, u64 *val)
+{
+	u64 v = 0;
+
+	if (_copy_from_user(&v, p, size)) {
+		*val = 0;
+		return -EFAULT;
+	}
+	*val = v;
+	return 0;
+}
+unsigned long kpi_put_user(void __user *p, const void *src, unsigned long size)
+{
+	return _copy_to_user(p, src, size) ? -EFAULT : 0;
+}
+#define KPI_GET_USER(n) \
+	".globl __get_user_" #n "\n__get_user_" #n ":\n" \
+	"\tpush %rcx\n\tpush %rsi\n\tpush %rdi\n\tpush %r8\n\tpush %r9\n\tpush %r10\n\tpush %r11\n" \
+	"\tsub $16,%rsp\n\tmov %rax,%rdi\n\tmov $" #n ",%esi\n\tmov %rsp,%rdx\n\tcall kpi_get_user\n\tmov (%rsp),%rdx\n" \
+	"\tadd $16,%rsp\n\tpop %r11\n\tpop %r10\n\tpop %r9\n\tpop %r8\n\tpop %rdi\n\tpop %rsi\n\tpop %rcx\n\tret\n"
+#define KPI_PUT_USER(n) \
+	".globl __put_user_" #n "\n__put_user_" #n ":\n" \
+	"\tpush %rax\n\tpush %rdx\n\tpush %rsi\n\tpush %rdi\n\tpush %r8\n\tpush %r9\n\tpush %r10\n\tpush %r11\n" \
+	"\tsub $8,%rsp\n\tmov %rax,(%rsp)\n\tmov %rcx,%rdi\n\tmov %rsp,%rsi\n\tmov $" #n ",%edx\n\tcall kpi_put_user\n" \
+	"\tmov %eax,%ecx\n\tadd $8,%rsp\n\tpop %r11\n\tpop %r10\n\tpop %r9\n\tpop %r8\n\tpop %rdi\n\tpop %rsi\n" \
+	"\tpop %rdx\n\tpop %rax\n\tret\n"
+/* entry %rsp is 8 mod 16: 7 pushes + 16 (get) and 8 pushes + 8 (put) keep the C call 16-byte aligned */
+__asm__(KPI_GET_USER(1) KPI_GET_USER(2) KPI_GET_USER(4) KPI_GET_USER(8)
+	KPI_PUT_USER(1) KPI_PUT_USER(2) KPI_PUT_USER(4) KPI_PUT_USER(8));
 void sched_set_fifo(struct task_struct *p) { }
 struct task_struct *pid_task(struct pid *pid, enum pid_type type) { return NULL; }
 pid_t pid_vnr(struct pid *pid) { return 0; }

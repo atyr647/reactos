@@ -91,6 +91,7 @@ typedef struct _LKDISK_IO
     PSCSI_REQUEST_BLOCK Srb;
     int Err;
     int Result, Resid;          /* SCSI passthrough: result word and residual count */
+    BOOLEAN Flush;              /* SRB_FUNCTION_FLUSH/SHUTDOWN turned into SYNCHRONIZE CACHE */
     UCHAR Sense[32];
 } LKDISK_IO, *PLKDISK_IO;
 
@@ -165,6 +166,13 @@ static VOID NTAPI LkScsiDpc(PKDPC Dpc, PVOID Ctx, PVOID A1, PVOID A2)
         SrbStatus = SRB_STATUS_SUCCESS;
         if (Resid > 0 && (ULONG)Resid <= Len) Len -= Resid;
     }
+    else if (Host == 0 && Status == 2 && Io->Flush && (Io->Sense[2] & 0x0F) == 5)
+    {
+        /* SYNCHRONIZE CACHE rejected with ILLEGAL REQUEST: the device has no cache to flush (Linux sd treats it the same) */
+        SrbStatus = SRB_STATUS_SUCCESS;
+        Status = 0;
+        Len = 0;
+    }
     else if (Host == 0 && Status == 2)          /* CHECK CONDITION */
     {
         SrbStatus = SRB_STATUS_ERROR;
@@ -209,8 +217,12 @@ static VOID ScsiStartIo(PIRP Irp)
     PLKDISK_IO Io;
     PVOID Va = NULL;
     int Dir = 3;                                /* DMA_NONE */
+    BOOLEAN Flush = Srb->Function != SRB_FUNCTION_EXECUTE_SCSI;
+    UCHAR SyncCache[10] = { SCSIOP_SYNCHRONIZE_CACHE };   /* whole medium */
 
-    if (Srb->DataTransferLength)
+    if (Flush)
+        Srb->DataTransferLength = 0;
+    else if (Srb->DataTransferLength)
     {
         Va = MappedBuffer(Irp, Srb);
         if (!Va) { SrbDone(Irp, Srb, SRB_STATUS_ERROR, 0); return; }
@@ -223,7 +235,9 @@ static VOID ScsiStartIo(PIRP Irp)
     KeInitializeDpc(&Io->Dpc, LkScsiDpc, Io);
     Io->Irp = Irp;
     Io->Srb = Srb;
-    if (ScsiSubmit(Pdo->Sdev, Srb->Cdb, Srb->CdbLength, Dir, Va, Srb->DataTransferLength, LkScsiDone, Io))
+    Io->Flush = Flush;
+    if (ScsiSubmit(Pdo->Sdev, Flush ? SyncCache : Srb->Cdb, Flush ? sizeof(SyncCache) : Srb->CdbLength, Dir, Va,
+                   Srb->DataTransferLength, LkScsiDone, Io))
     {
         ExFreePoolWithTag(Io, LKDISK_TAG);
         Srb->SrbStatus = SRB_STATUS_BUSY;
@@ -250,7 +264,7 @@ static VOID StartIo(PIRP Irp)
         return;
     }
 
-    switch (Cdb[0])
+    switch (Srb->Function == SRB_FUNCTION_EXECUTE_SCSI ? Cdb[0] : SCSIOP_SYNCHRONIZE_CACHE)
     {
         case SCSIOP_READ: case SCSIOP_WRITE:
             Write = Cdb[0] == SCSIOP_WRITE; Lba = BE32(Cdb + 2); Blocks = BE16(Cdb + 7); break;
@@ -258,7 +272,7 @@ static VOID StartIo(PIRP Irp)
             Write = Cdb[0] == SCSIOP_WRITE16; Lba = BE64(Cdb + 2); Blocks = BE32(Cdb + 10); break;
         case 0xA8: case 0xAA:   /* READ(12) / WRITE(12) */
             Write = Cdb[0] == 0xAA; Lba = BE32(Cdb + 2); Blocks = BE32(Cdb + 6); break;
-        case SCSIOP_SYNCHRONIZE_CACHE: case 0x91:
+        case SCSIOP_SYNCHRONIZE_CACHE: case 0x91:     /* also SRB_FUNCTION_FLUSH / SRB_FUNCTION_SHUTDOWN */
         {
             Io = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Io), LKDISK_TAG);
             if (!Io) { SrbDone(Irp, Srb, SRB_STATUS_ERROR, 0); return; }
@@ -761,9 +775,21 @@ NTSTATUS NTAPI LkDiskScsi(PDEVICE_OBJECT Dev, PIRP Irp)
             SrbDone(Irp, Srb, SRB_STATUS_SUCCESS, 0);
             return STATUS_SUCCESS;
         case SRB_FUNCTION_RELEASE_DEVICE: case SRB_FUNCTION_LOCK_QUEUE: case SRB_FUNCTION_UNLOCK_QUEUE:
-        case SRB_FUNCTION_RELEASE_QUEUE: case SRB_FUNCTION_FLUSH_QUEUE: case SRB_FUNCTION_SHUTDOWN: case SRB_FUNCTION_FLUSH:
+        case SRB_FUNCTION_RELEASE_QUEUE: case SRB_FUNCTION_FLUSH_QUEUE:
             SrbDone(Irp, Srb, SRB_STATUS_SUCCESS, 0);
             return STATUS_SUCCESS;
+        case SRB_FUNCTION_SHUTDOWN: case SRB_FUNCTION_FLUSH:
+        {
+            /* the class driver relies on these to make written data durable (it only sends SYNCHRONIZE CACHE itself when
+             * it believes the write cache is on): flush the device cache on the worker thread */
+            KIRQL Old;
+            IoMarkIrpPending(Irp);
+            KeAcquireSpinLock(&WorkLock, &Old);
+            InsertTailList(&IoQueue, &Irp->Tail.Overlay.ListEntry);
+            KeReleaseSpinLock(&WorkLock, Old);
+            KeSetEvent(&WorkEvent, IO_NO_INCREMENT, FALSE);
+            return STATUS_PENDING;
+        }
         case SRB_FUNCTION_EXECUTE_SCSI:
             break;
         default:

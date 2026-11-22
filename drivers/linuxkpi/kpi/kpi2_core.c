@@ -374,8 +374,11 @@ bool flush_work(struct work_struct *work)
 
 bool flush_delayed_work(struct delayed_work *dwork)
 {
-	if (timer_delete_sync(&dwork->timer))
+	if (timer_delete_sync(&dwork->timer)) {
+		/* the timer armed the pending bit; hand the work over exactly as delayed_work_timer_fn does */
+		clear_bit(WORK_STRUCT_PENDING_BIT, work_data_bits(&dwork->work));
 		queue_work_on(0, dwork->wq, &dwork->work);
+	}
 	return flush_work(&dwork->work);
 }
 

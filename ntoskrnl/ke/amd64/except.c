@@ -355,23 +355,33 @@ KiDispatchException(IN PEXCEPTION_RECORD ExceptionRecord,
                         ULONG pi;
                         Probe[0] = Context.Rip;
                         Probe[1] = (Context.Rsp >= 0x10000 && Context.Rsp + 8 < (ULONG64)MmUserProbeAddress) ? Stk[0] : 0;
-                        if (Peb && Peb->Ldr)
+/* The loader list is maintained by user mode: only follow pointers into user space, and only so far */
+#define KI_UM_RANGE(p, n) ((ULONG_PTR)(p) >= 0x10000 && (ULONG_PTR)(p) + (n) > (ULONG_PTR)(p) && \
+                           (ULONG_PTR)(p) + (n) <= (ULONG_PTR)MmUserProbeAddress)
+                        if (Peb && KI_UM_RANGE(Peb->Ldr, sizeof(PEB_LDR_DATA)))
                         {
                             for (pi = 0; pi < 2; pi++)
                             {
                                 PLIST_ENTRY Head = &Peb->Ldr->InLoadOrderModuleList, Ent;
-                                for (Ent = Head->Flink; Ent != Head && Ent; Ent = Ent->Flink)
+                                ULONG Steps = 0;
+                                for (Ent = Head->Flink;
+                                     Ent != Head && Steps < 1024 && KI_UM_RANGE(Ent, sizeof(LDR_DATA_TABLE_ENTRY));
+                                     Ent = Ent->Flink, Steps++)
                                 {
                                     PLDR_DATA_TABLE_ENTRY M = CONTAINING_RECORD(Ent, LDR_DATA_TABLE_ENTRY, InLoadOrderLinks);
                                     if (Probe[pi] >= (ULONG64)M->DllBase && Probe[pi] < (ULONG64)M->DllBase + M->SizeOfImage)
                                     {
+                                        UNICODE_STRING Name = M->BaseDllName;
+                                        if (!KI_UM_RANGE(Name.Buffer, Name.Length) || Name.Length > Name.MaximumLength)
+                                            RtlInitEmptyUnicodeString(&Name, NULL, 0);
                                         DPRINT1("UM-AV   %s %p is in %wZ +%lx (base %p)\n", pi ? "[rsp]" : "rip", (PVOID)Probe[pi],
-                                                &M->BaseDllName, (ULONG)(Probe[pi] - (ULONG64)M->DllBase), M->DllBase);
+                                                &Name, (ULONG)(Probe[pi] - (ULONG64)M->DllBase), M->DllBase);
                                         break;
                                     }
                                 }
                             }
                         }
+#undef KI_UM_RANGE
                         if (Context.Rip >= 0x10000 && Context.Rip + 16 < (ULONG64)MmUserProbeAddress)
                         {
                             PUCHAR Code = (PUCHAR)Context.Rip;

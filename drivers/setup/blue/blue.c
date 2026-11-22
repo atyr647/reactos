@@ -106,6 +106,8 @@ static PUCHAR FbShown = NULL;
 static SIZE_T FbShownSize = 0;
 static USHORT FbShownCurX, FbShownCurY;
 static BOOLEAN FbShownCurOn;
+/* Held by each render pass, and while ScrResetScreen replaces or frees VideoMemory / FbShown */
+static FAST_MUTEX FbLock;
 
 /* The firmware tree contains an adapter "UEFI Internal" when freeldr booted through UEFI. */
 static BOOLEAN
@@ -168,7 +170,7 @@ FbDrawCell(
 }
 
 static VOID
-FbRender(VOID)
+FbRenderLocked(VOID)
 {
     PDEVICE_EXTENSION E = FbExt;
     PUCHAR Vm;
@@ -179,7 +181,8 @@ FbRender(VOID)
     Vm = E->VideoMemory;
     Cols = E->Columns;
     Rows = min((ULONG)E->Rows, (ULONG)FB_MAX_ROWS);
-    if (Cols * Rows * 2 > FbShownSize) return;
+    /* Columns/Rows can change before the buffers are reallocated: never index past either buffer */
+    if (Cols * Rows * 2 > FbShownSize || Cols * Rows * 2 > E->VideoMemorySize) return;
     CurOn = E->CursorVisible && E->CursorY < Rows && E->CursorX < Cols;
 
     for (Row = 0; Row < Rows; Row++)
@@ -201,6 +204,14 @@ FbRender(VOID)
     FbShownCurOn = CurOn;
     FbShownCurX = E->CursorX;
     FbShownCurY = E->CursorY;
+}
+
+static VOID
+FbRender(VOID)
+{
+    ExAcquireFastMutex(&FbLock);
+    FbRenderLocked();
+    ExReleaseFastMutex(&FbLock);
 }
 
 static VOID
@@ -651,7 +662,7 @@ ScrAcquireOwnership(
 }
 
 static BOOLEAN
-ScrResetScreen(
+ScrResetScreenWorker(
     _In_ PDEVICE_EXTENSION DeviceExtension,
     _In_ BOOLEAN FullReset,
     _In_ BOOLEAN Enable)
@@ -733,7 +744,6 @@ ScrResetScreen(
                     FbShownCurOn = FALSE;
                     FbExt = DeviceExtension;
                     InbvSolidColorFill(0, 0, 639, 479, 0);
-                    FbStartRenderer();
                 }
             }
             else
@@ -845,6 +855,27 @@ ScrResetScreen(
     }
 
     return TRUE; // STATUS_SUCCESS;
+}
+
+static BOOLEAN
+ScrResetScreen(
+    _In_ PDEVICE_EXTENSION DeviceExtension,
+    _In_ BOOLEAN FullReset,
+    _In_ BOOLEAN Enable)
+{
+    BOOLEAN Ok;
+
+    /* Partial resets (also called at high IRQL by the display reset callback) neither free nor replace buffers */
+    if (!ScrFb || !FullReset)
+        return ScrResetScreenWorker(DeviceExtension, FullReset, Enable);
+
+    /* The framebuffer renderer reads VideoMemory and FbShown: replace or free them only between its passes */
+    ExAcquireFastMutex(&FbLock);
+    Ok = ScrResetScreenWorker(DeviceExtension, FullReset, Enable);
+    ExReleaseFastMutex(&FbLock);
+    if (Ok && Enable && FbExt)
+        FbStartRenderer();      /* creates the render thread: PASSIVE_LEVEL, outside the lock */
+    return Ok;
 }
 
 static DRIVER_DISPATCH ScrCreateClose;
@@ -1760,6 +1791,7 @@ DriverEntry(
 
     /* No VGA text mode when booted through UEFI: paint the text screen into the framebuffer instead */
     ScrFb = ScrDetectFramebufferConsole();
+    ExInitializeFastMutex(&FbLock);
 
     DriverObject->MajorFunction[IRP_MJ_CREATE] = ScrCreateClose;
     DriverObject->MajorFunction[IRP_MJ_CLOSE]  = ScrCreateClose;

@@ -296,7 +296,9 @@ FUNC KiInvalidOpcodeFault
     test word ptr [rbp + KTRAP_FRAME_SegCs], 3
     jz KiInvalidOpcodeKernel
 
+    /* User mode: always raise STATUS_ILLEGAL_INSTRUCTION */
     // FIXME: handle STATUS_INVALID_LOCK_SEQUENCE
+    jmp KiInvalidOpcodeDispatch
 
 KiInvalidOpcodeKernel:
     /* Kernel mode fault. Linux modules (LinuxKPI) execute "ud2" for WARN(): skip it and carry on. */

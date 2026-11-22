@@ -25,21 +25,25 @@
  * overlapped WSASend with IOCP) do not expect: the rest of the message was silently
  * dropped and the stream desynchronized. Grow the (idle) window instead so the whole
  * request fits and the normal "wait until it fits" logic applies. */
-static BOOLEAN AfdGrowSendWindow(PAFD_FCB FCB, ULONG Needed)
+/* Returns STATUS_SUCCESS (the window is big enough now), STATUS_PENDING (the window is busy:
+ * SendComplete retries once the data in flight has gone), STATUS_BUFFER_OVERFLOW (more than
+ * AFD_MAX_SEND_GROW) or STATUS_INSUFFICIENT_RESOURCES (idle window, allocation failed: nothing
+ * would ever retry, so the caller must fail the request rather than queue it). */
+static NTSTATUS AfdGrowSendWindow(PAFD_FCB FCB, ULONG Needed)
 {
     PCHAR NewWindow;
 
-    if (Needed <= FCB->Send.Size) return TRUE;
-    if (Needed > AFD_MAX_SEND_GROW) return FALSE;
-    if (FCB->Send.BytesUsed != 0 || FCB->SendIrp.InFlightRequest) return FALSE;
+    if (Needed <= FCB->Send.Size) return STATUS_SUCCESS;
+    if (Needed > AFD_MAX_SEND_GROW) return STATUS_BUFFER_OVERFLOW;
+    if (FCB->Send.BytesUsed != 0 || FCB->SendIrp.InFlightRequest) return STATUS_PENDING;
 
     NewWindow = ExAllocatePoolWithTag(PagedPool, Needed, TAG_AFD_DATA_BUFFER);
-    if (!NewWindow) return FALSE;
+    if (!NewWindow) return STATUS_INSUFFICIENT_RESOURCES;
 
     if (FCB->Send.Window) ExFreePoolWithTag(FCB->Send.Window, TAG_AFD_DATA_BUFFER);
     FCB->Send.Window = NewWindow;
     FCB->Send.Size = Needed;
-    return TRUE;
+    return STATUS_SUCCESS;
 }
 
 static BOOLEAN AfdSendWillFitLater(PAFD_FCB FCB, ULONG SendLength)
@@ -193,7 +197,7 @@ static NTSTATUS NTAPI SendComplete
 
     ASSERT(SendLength == 0);
 
-   if ( !HaltSendQueue && !IsListEmpty( &FCB->PendingIrpList[FUNCTION_SEND] ) ) {
+   while ( !HaltSendQueue && !IsListEmpty( &FCB->PendingIrpList[FUNCTION_SEND] ) ) {
         NextIrpEntry = FCB->PendingIrpList[FUNCTION_SEND].Flink;
         NextIrp = CONTAINING_RECORD(NextIrpEntry, IRP, Tail.Overlay.ListEntry);
         NextIrpSp = IoGetCurrentIrpStackLocation( NextIrp );
@@ -211,8 +215,19 @@ static NTSTATUS NTAPI SendComplete
             SendLength += SendReq->BufferArray[i].len;
         }
 
-        if (AfdSendIsBlocking(FCB, SendReq))
-            AfdGrowSendWindow(FCB, SendLength);
+        if (AfdSendIsBlocking(FCB, SendReq) &&
+            AfdGrowSendWindow(FCB, SendLength) == STATUS_INSUFFICIENT_RESOURCES)
+        {
+            /* Nothing is in flight that would retry the allocation: fail this send and look at the next one */
+            RemoveEntryList(&NextIrp->Tail.Overlay.ListEntry);
+            (void)IoSetCancelRoutine(NextIrp, NULL);
+            UnlockBuffers(SendReq->BufferArray, SendReq->BufferCount, FALSE);
+            if (NextIrp->MdlAddress) UnlockRequest(NextIrp, NextIrpSp);
+            NextIrp->IoStatus.Status = STATUS_INSUFFICIENT_RESOURCES;
+            NextIrp->IoStatus.Information = 0;
+            IoCompleteRequest(NextIrp, IO_NETWORK_INCREMENT);
+            continue;
+        }
 
         SpaceAvail = FCB->Send.Size - FCB->Send.BytesUsed;
 
@@ -261,6 +276,7 @@ static NTSTATUS NTAPI SendComplete
             NextIrp->IoStatus.Information = TotalBytesCopied;
             NextIrp->Tail.Overlay.DriverContext[3] = (PVOID)NextIrp->IoStatus.Information;
         }
+        break;
     }
 
     if (FCB->Send.Size - FCB->Send.BytesUsed != 0 && !FCB->SendClosed &&
@@ -512,8 +528,13 @@ AfdConnectedSocketWriteData(PDEVICE_OBJECT DeviceObject, PIRP Irp,
         SendLength += SendReq->BufferArray[i].len;
     }
 
-    if (AfdSendIsBlocking(FCB, SendReq))
-        AfdGrowSendWindow(FCB, SendLength);
+    if (AfdSendIsBlocking(FCB, SendReq) &&
+        AfdGrowSendWindow(FCB, SendLength) == STATUS_INSUFFICIENT_RESOURCES)
+    {
+        /* The window is idle, so no send completion would retry: fail now instead of pending forever */
+        UnlockBuffers( SendReq->BufferArray, SendReq->BufferCount, FALSE );
+        return UnlockAndMaybeComplete( FCB, STATUS_INSUFFICIENT_RESOURCES, Irp, 0 );
+    }
 
     SpaceAvail = FCB->Send.Size - FCB->Send.BytesUsed;
 

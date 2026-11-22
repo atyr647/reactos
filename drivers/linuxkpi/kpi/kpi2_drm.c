@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
  * Entry points the host driver uses to give user mode a DRM device node: open/ioctl/close on a minor, plus
- * a few helpers. The Linux side creates the struct inode / struct file that drm_open() expects; ioctl
- * arguments are passed as kernel pointers (copy_from_user/copy_to_user are memcpy here).
+ * a few helpers. The Linux side creates the struct inode / struct file that drm_open() expects. The ioctl
+ * argument is a kernel copy that the host registers as the thread's user buffer; pointers nested inside it are
+ * addresses in the calling process. copy_from_user/copy_to_user (kpi_core.c) accept only those two.
  */
 #include <linux/module.h>
 #include <linux/fs.h>
@@ -36,6 +37,8 @@ void *kpi_drm_open(int minor)
 	h->file.f_flags = O_RDWR;
 	h->file.f_op = &kpi_dummy_fops;
 	r = drm_open(&h->inode, &h->file);
+	if (!r && !h->file.private_data)
+		r = -ENODEV;		/* no drm_file: never hand out a handle that would be dereferenced as one */
 	if (r) {
 		pr_err("kpi2_drm: drm_open(minor %d) failed: %d\n", minor, r);
 		kfree(h);

@@ -315,8 +315,9 @@ CompareObjectHandles(IN HANDLE hFirstObjectHandle,
                      IN HANDLE hSecondObjectHandle)
 {
     NTSTATUS Status;
-    PSYSTEM_HANDLE_INFORMATION Info = NULL;
-    ULONG Size = 0x10000, Needed, Attempt, i;
+    PSYSTEM_HANDLE_INFORMATION_EX Info = NULL;
+    ULONG Size = 0x10000, Needed, Attempt;
+    ULONG_PTR i;
     PVOID First = NULL, Second = NULL;
     ULONG_PTR Pid = (ULONG_PTR)NtCurrentTeb()->ClientId.UniqueProcess;
     BOOL Result = FALSE;
@@ -331,7 +332,8 @@ CompareObjectHandles(IN HANDLE hFirstObjectHandle,
             SetLastError(ERROR_NOT_ENOUGH_MEMORY);
             return FALSE;
         }
-        Status = NtQuerySystemInformation(SystemHandleInformation, Info, Size, &Needed);
+        /* The extended class: the legacy one truncates handle values (and PIDs) to 16 bits */
+        Status = NtQuerySystemInformation(SystemExtendedHandleInformation, Info, Size, &Needed);
         if (Status != STATUS_INFO_LENGTH_MISMATCH) break;
         RtlFreeHeap(RtlGetProcessHeap(), 0, Info);
         Info = NULL;
@@ -348,8 +350,8 @@ CompareObjectHandles(IN HANDLE hFirstObjectHandle,
     for (i = 0; i < Info->NumberOfHandles; i++)
     {
         if (Info->Handles[i].UniqueProcessId != Pid) continue;
-        if (Info->Handles[i].HandleValue == (USHORT)(ULONG_PTR)hFirstObjectHandle) First = Info->Handles[i].Object;
-        if (Info->Handles[i].HandleValue == (USHORT)(ULONG_PTR)hSecondObjectHandle) Second = Info->Handles[i].Object;
+        if (Info->Handles[i].HandleValue == (ULONG_PTR)hFirstObjectHandle) First = Info->Handles[i].Object;
+        if (Info->Handles[i].HandleValue == (ULONG_PTR)hSecondObjectHandle) Second = Info->Handles[i].Object;
     }
     RtlFreeHeap(RtlGetProcessHeap(), 0, Info);
 

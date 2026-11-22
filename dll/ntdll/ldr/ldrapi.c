@@ -1511,6 +1511,9 @@ LdrUnloadDll(
             DPRINT1("LDR: Unmapping [%ws]\n", LdrEntry->BaseDllName.Buffer);
         }
 
+        /* Drop its implicit TLS before the template goes away with the image */
+        LdrpReleaseTlsData(LdrEntry);
+
 #if (_WIN32_WINNT >= _WIN32_WINNT_VISTA) || (DLL_EXPORT_VERSION >= _WIN32_WINNT_VISTA)
         /* Send shutdown notification */
         LdrpSendDllNotifications(CurrentEntry, LDR_DLL_NOTIFICATION_REASON_UNLOADED);

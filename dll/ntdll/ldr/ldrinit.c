@@ -1490,8 +1490,8 @@ LdrpTlsAddToTeb(IN PTEB Teb,
  * give every existing thread a block initialized from the TLS template.
  * Must be called with the loader lock held.
  *
- * Limitation: such a module is pinned (it will not be unloaded), because the
- * per-thread blocks are not released on FreeLibrary.
+ * The registration is undone by LdrpReleaseTlsData when the module is unmapped
+ * (FreeLibrary, or a load that fails later on: imports, DllMain).
  */
 NTSTATUS
 NTAPI
@@ -1605,7 +1605,6 @@ LdrpHandleTlsData(IN PLDR_DATA_TABLE_ENTRY LdrEntry)
     LdrpNumberOfTlsEntries = Index + 1;
     LdrpImageHasTls = TRUE;
     LdrEntry->TlsIndex = -1;
-    LdrEntry->LoadCount = 0xFFFF; /* pinned */
 
     RtlFreeHeap(RtlGetProcessHeap(), 0, Buffer);
     return STATUS_SUCCESS;
@@ -1614,6 +1613,42 @@ Fail:
     if (Buffer) RtlFreeHeap(RtlGetProcessHeap(), 0, Buffer);
     RtlFreeHeap(RtlGetProcessHeap(), 0, TlsData);
     return Status;
+}
+
+/*
+ * A module is being unmapped: forget its implicit TLS, so that threads created
+ * later do not copy the template out of the unmapped image. The index is not
+ * reused. The current thread's block is freed; the blocks of other threads are
+ * not safely reachable from here and stay allocated (a small leak per unload).
+ * Must be called with the loader lock held.
+ */
+VOID
+NTAPI
+LdrpReleaseTlsData(IN PLDR_DATA_TABLE_ENTRY LdrEntry)
+{
+    ULONG_PTR Base = (ULONG_PTR)LdrEntry->DllBase, End = Base + LdrEntry->SizeOfImage;
+    PVOID *TlsVector = NtCurrentTeb()->ThreadLocalStoragePointer;
+    PLIST_ENTRY NextEntry = LdrpTlsList.Flink;
+    PLDRP_TLS_DATA TlsData;
+    ULONG Index;
+
+    while (NextEntry != &LdrpTlsList)
+    {
+        TlsData = CONTAINING_RECORD(NextEntry, LDRP_TLS_DATA, TlsLinks);
+        NextEntry = NextEntry->Flink;
+
+        if (TlsData->TlsDirectory.AddressOfIndex < Base || TlsData->TlsDirectory.AddressOfIndex >= End)
+            continue;
+
+        Index = TlsData->TlsDirectory.Characteristics;
+        RemoveEntryList(&TlsData->TlsLinks);
+        if (TlsVector && Index < LdrpNumberOfTlsEntries)
+        {
+            LdrpFreeTlsBlock(TlsVector[Index]);
+            TlsVector[Index] = NULL;
+        }
+        RtlFreeHeap(RtlGetProcessHeap(), 0, TlsData);
+    }
 }
 
 VOID

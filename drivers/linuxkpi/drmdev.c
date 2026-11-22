@@ -24,7 +24,9 @@ DrmResolve(VOID)
     if (!DrmOpen) DrmOpen = (PFN_OPEN)LkpiLookupModuleSymbol("kpi_drm_open");
     if (!DrmIoctl) DrmIoctl = (PFN_IOCTL)LkpiLookupModuleSymbol("kpi_drm_ioctl");
     if (!DrmClose) DrmClose = (PFN_CLOSE)LkpiLookupModuleSymbol("kpi_drm_close");
-    return DrmOpen && DrmIoctl && DrmClose;
+    /* the bridge (kpi2.ko) is always there; the DRM core itself (drm.ko) only when a DRM driver ships. Without it
+     * drm_open() would be an unresolved-import stub, so there is no device to offer. */
+    return DrmOpen && DrmIoctl && DrmClose && LkpiLookupModuleSymbol("drm_open");
 }
 
 NTSTATUS NTAPI
@@ -78,7 +80,9 @@ DrmControl(PDEVICE_OBJECT Dev, PIRP Irp)
         ULONG OutLen = Sp->Parameters.DeviceIoControl.OutputBufferLength;
         ULONG Hdr = FIELD_OFFSET(LKPI_DRM_IOCTL, Data);
 
-        if (!Io || InLen < Hdr || Io->Size > InLen - Hdr || OutLen < Hdr + Io->Size || !Sp->FileObject->FsContext)
+        /* the Linux ioctl reads and writes exactly _IOC_SIZE(Cmd) bytes of its argument */
+        if (!Io || InLen < Hdr || Io->Size > InLen - Hdr || OutLen < Hdr + Io->Size || !Sp->FileObject->FsContext ||
+            Io->Size != ((Io->Cmd >> 16) & 0x3FFF))
             Status = STATUS_INVALID_PARAMETER;
         else
         {
@@ -87,11 +91,18 @@ DrmControl(PDEVICE_OBJECT Dev, PIRP Irp)
             PUCHAR Tmp = ExAllocatePoolWithTag(NonPagedPool, Size + 16, LKPI_TAG);
 
             if (!Tmp) Status = STATUS_INSUFFICIENT_RESOURCES;
+            else if (!LkpiUserArgEnter(ALIGN_UP_POINTER_BY(Tmp, 16), Size))
+            {
+                ExFreePoolWithTag(Tmp, LKPI_TAG);
+                Status = STATUS_DEVICE_BUSY;
+            }
             else
             {
+                /* nested pointers inside the argument stay user addresses of this process (checked by nt_copy_user) */
                 PUCHAR Arg = (PUCHAR)ALIGN_UP_POINTER_BY(Tmp, 16);
                 RtlCopyMemory(Arg, Io->Data, Size);
                 Io->Result = (long)DrmIoctl(Sp->FileObject->FsContext, (unsigned int)Io->Cmd, Arg);
+                LkpiUserArgLeave();
                 RtlCopyMemory(Io->Data, Arg, Size);
                 ExFreePoolWithTag(Tmp, LKPI_TAG);
                 Info = Hdr + Size;
@@ -111,6 +122,11 @@ LkpiCreateDrmNodes(PDRIVER_OBJECT DriverObject)
     static const int Minors[] = { 0, 128 };
     ULONG i;
 
+    if (!DrmResolve())
+    {
+        DbgPrint("LKPI: no Linux DRM core loaded, no DRM nodes\n");
+        return STATUS_SUCCESS;
+    }
 
     for (i = 0; i < RTL_NUMBER_OF(Minors); i++)
     {

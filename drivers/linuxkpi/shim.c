@@ -5,6 +5,7 @@
  */
 
 #include "linuxkpi.h"
+#include <pseh/pseh2.h>
 
 typedef unsigned long long u64;
 typedef unsigned int u32;
@@ -565,6 +566,109 @@ void LX_ABI nt_log_addr(const char *tag, void *addr)
     DbgPrint("LKPI: %s %p %s\n", tag, addr, Sym);
 }
 
+/* ---- user memory (copy_from_user, copy_to_user, get_user, put_user) ------------------------------- */
+/*
+ * Linux "user pointers" reach the modules in two forms: the ioctl argument, which the host has already captured into a
+ * kernel buffer and registers here for the calling thread, and pointers nested inside that argument, which point into
+ * the calling process. Anything else is refused (Linux sees -EFAULT): a user-space range is probed and accessed under
+ * SEH, a kernel address is accepted only inside the current thread's registered argument.
+ */
+typedef struct _LKPI_USER_ARG
+{
+    PKTHREAD Thread;
+    PUCHAR Base;
+    SIZE_T Size;
+} LKPI_USER_ARG, *PLKPI_USER_ARG;
+static LKPI_USER_ARG LkpiUserArgs[32];
+
+static PLKPI_USER_ARG LkpiFindUserArg(VOID)
+{
+    PKTHREAD Self = KeGetCurrentThread();
+    ULONG i;
+
+    for (i = 0; i < RTL_NUMBER_OF(LkpiUserArgs); i++)
+        if (LkpiUserArgs[i].Thread == Self)
+            return &LkpiUserArgs[i];
+    return NULL;
+}
+
+BOOLEAN LkpiUserArgEnter(PVOID Base, SIZE_T Size)
+{
+    ULONG i;
+
+    ASSERT(!LkpiFindUserArg());
+    for (i = 0; i < RTL_NUMBER_OF(LkpiUserArgs); i++)
+    {
+        if (!InterlockedCompareExchangePointer((PVOID *)&LkpiUserArgs[i].Thread, KeGetCurrentThread(), NULL))
+        {
+            /* only this thread looks at its own slot, so the fields can follow the claim */
+            LkpiUserArgs[i].Base = Base;
+            LkpiUserArgs[i].Size = Size;
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+VOID LkpiUserArgLeave(VOID)
+{
+    PLKPI_USER_ARG Arg = LkpiFindUserArg();
+
+    if (!Arg) return;
+    Arg->Base = NULL;
+    Arg->Size = 0;
+    InterlockedExchangePointer((PVOID *)&Arg->Thread, NULL);
+}
+
+/* Probes and copies under SEH. A separate Windows-ABI function: GCC emits no SEH unwind data for sysv_abi functions. */
+static DECLSPEC_NOINLINE BOOLEAN
+LkpiCopyUserProtected(PVOID Dst, const VOID *Src, SIZE_T Len, PVOID User, BOOLEAN ToUser)
+{
+    BOOLEAN Ok = FALSE;
+
+    _SEH2_TRY
+    {
+        if (ToUser)
+            ProbeForWrite(User, Len, 1);
+        else
+            ProbeForRead(User, Len, 1);
+        RtlCopyMemory(Dst, Src, Len);
+        Ok = TRUE;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Ok = FALSE;
+    }
+    _SEH2_END;
+    return Ok;
+}
+
+/* Copies Len bytes between kernel memory and a Linux user pointer (Dst if ToUser, else Src). Returns the number of bytes
+ * not copied: 0 or Len. */
+unsigned long LX_ABI nt_copy_user(void *Dst, const void *Src, unsigned long Len, int ToUser)
+{
+    PUCHAR User = ToUser ? (PUCHAR)Dst : (PUCHAR)Src;
+    PLKPI_USER_ARG Arg;
+
+    if (!Len)
+        return 0;
+    Arg = LkpiFindUserArg();
+    if (Arg)
+    {
+        if (User >= Arg->Base && Len <= Arg->Size && (SIZE_T)(User - Arg->Base) <= Arg->Size - Len)
+        {
+            RtlCopyMemory(Dst, Src, Len);
+            return 0;
+        }
+        /* otherwise only memory of the calling process, from a context that may take page faults */
+        if ((ULONG_PTR)User < (ULONG_PTR)MmUserProbeAddress && KeGetCurrentIrql() <= APC_LEVEL &&
+            LkpiCopyUserProtected(Dst, Src, Len, User, ToUser != 0))
+            return 0;
+    }
+    DbgPrint("LKPI: refused %s user pointer %p (%lu bytes)\n", ToUser ? "write to" : "read from", User, Len);
+    return Len;
+}
+
 static void (LX_ABI *LkpiTickFn)(void);
 static KTIMER LkpiTickTimer;
 static KDPC LkpiTickDpc;
@@ -622,6 +726,7 @@ const LKPI_EXPORT LkpiExports[] =
     { "nt_time_ms", (PVOID)nt_time_ms },
     { "nt_dbgprint", (PVOID)nt_dbgprint },
     { "nt_log_addr", (PVOID)nt_log_addr },
+    { "nt_copy_user", (PVOID)nt_copy_user },
     { "nt_input_event", (PVOID)nt_input_event },
     { "nt_register_tick", (PVOID)nt_register_tick },
 };

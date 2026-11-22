@@ -9,6 +9,7 @@
  */
 #include <linux/module.h>
 #include <linux/slab.h>
+#include <linux/refcount.h>
 #include <linux/delay.h>
 #include <linux/blkdev.h>
 #include <linux/scatterlist.h>
@@ -80,6 +81,8 @@ int scsi_is_host_device(const struct device *dev) { return 0; }
 /* ---- command execution ------------------------------------------------------------------------------- */
 struct kpi_cmd {
 	struct work_struct done_work;
+	refcount_t ref;			/* the completion path, plus a synchronous submitter that may have to abort */
+	unsigned long claimed;		/* bit 0: completed (scsi_done) or taken back after a timeout, whichever came first */
 	void (*done)(void *ctx, int result, int resid, const unsigned char *sense);
 	void *ctx;
 	struct scatterlist *sgl;
@@ -94,31 +97,38 @@ static struct kpi_cmd *kpi_cmd_of(struct scsi_cmnd *c) { return container_of(c, 
  * Completion is deferred to a worker, like Linux's blk-mq softirq completion: usb-storage calls scsi_done() *before* it
  * clears its in-flight command, so an immediate callback lets the next command arrive while the host still looks busy.
  */
+static void kpi_cmd_put(struct kpi_cmd *k)
+{
+	if (refcount_dec_and_test(&k->ref)) {
+		kfree(k->sgl);
+		kfree(k);
+	}
+}
 static void kpi_scsi_done_work(struct work_struct *w)
 {
 	struct kpi_cmd *k = container_of(w, struct kpi_cmd, done_work);
-	void (*done)(void *, int, int, const unsigned char *) = k->done;
-	void *ctx = k->ctx;
-	int result = k->cmd.result, resid = k->cmd.resid_len;
-	unsigned char sense[SCSI_SENSE_BUFFERSIZE];
 
-	memcpy(sense, k->sense, sizeof(sense));
-	kfree(k->sgl);
-	kfree(k);
-	done(ctx, result, resid, sense);
+	k->done(k->ctx, k->cmd.result, k->cmd.resid_len, k->sense);
+	kpi_cmd_put(k);
 }
 void scsi_done(struct scsi_cmnd *cmd)
 {
 	struct kpi_cmd *k = kpi_cmd_of(cmd);
 
+	if (test_and_set_bit(0, &k->claimed)) {
+		/* the submitter timed the command out and took it back (blk-mq's completion/timeout race): drop it */
+		kpi_cmd_put(k);
+		return;
+	}
 	INIT_WORK(&k->done_work, kpi_scsi_done_work);
 	queue_work(system_bh_wq, &k->done_work);
 }
 void scsi_done_direct(struct scsi_cmnd *cmd) { scsi_done(cmd); }
 
-/* done(ctx, result, resid, sense): result is the SCSI result word (host<<16 | status). `buf` must stay valid until done. */
-int kpi_scsi_submit(struct scsi_device *sdev, const unsigned char *cdb, int cdb_len, int dir, void *buf, unsigned int len,
-		    void (*done)(void *, int, int, const unsigned char *), void *ctx)
+/* `held`: the caller keeps a reference to the command (to abort it after a timeout) and drops it with kpi_cmd_put(). */
+static int __kpi_scsi_submit(struct scsi_device *sdev, const unsigned char *cdb, int cdb_len, int dir, void *buf,
+			     unsigned int len, void (*done)(void *, int, int, const unsigned char *), void *ctx,
+			     struct kpi_cmd **held)
 {
 	struct Scsi_Host *sh = sdev->host;
 	unsigned int nr = 0, i, left = len;
@@ -147,6 +157,7 @@ int kpi_scsi_submit(struct scsi_device *sdev, const unsigned char *cdb, int cdb_
 			left -= chunk;
 		}
 	}
+	refcount_set(&k->ref, held ? 2 : 1);
 	k->done = done;
 	k->ctx = ctx;
 	c->device = sdev;
@@ -173,7 +184,16 @@ int kpi_scsi_submit(struct scsi_device *sdev, const unsigned char *cdb, int cdb_
 		kfree(k);
 		return -EBUSY;
 	}
+	if (held)
+		*held = k;
 	return 0;
+}
+
+/* done(ctx, result, resid, sense): result is the SCSI result word (host<<16 | status). `buf` must stay valid until done. */
+int kpi_scsi_submit(struct scsi_device *sdev, const unsigned char *cdb, int cdb_len, int dir, void *buf, unsigned int len,
+		    void (*done)(void *, int, int, const unsigned char *), void *ctx)
+{
+	return __kpi_scsi_submit(sdev, cdb, cdb_len, dir, buf, len, done, ctx, NULL);
 }
 EXPORT_SYMBOL_GPL(kpi_scsi_submit);
 
@@ -187,18 +207,50 @@ static void kpi_sync_done(void *ctx, int result, int resid, const unsigned char 
 	memcpy(s->sense, sense, sizeof(s->sense));
 	complete(&s->done);
 }
-/* Synchronous internal command (scan). Returns the SCSI result word, or -1 on timeout/submit failure. */
+/* Error handling escalation of the real mid-layer (scsi_error.c): abort, then device reset, then bus reset. */
+static int kpi_eh(struct scsi_cmnd *c)
+{
+	const struct scsi_host_template *t = c->device->host->hostt;
+
+	if (t->eh_abort_handler && t->eh_abort_handler(c) == SUCCESS)
+		return SUCCESS;
+	if (t->eh_device_reset_handler && t->eh_device_reset_handler(c) == SUCCESS)
+		return SUCCESS;
+	if (t->eh_bus_reset_handler && t->eh_bus_reset_handler(c) == SUCCESS)
+		return SUCCESS;
+	if (t->eh_host_reset_handler && t->eh_host_reset_handler(c) == SUCCESS)
+		return SUCCESS;
+	return FAILED;
+}
+
+#define KPI_EXEC_FAILED	(-1)	/* not submitted, or timed out and aborted: the driver no longer references it */
+#define KPI_EXEC_STUCK	(-2)	/* timed out and could not be aborted: the driver may still use the device and buffer */
+
+/*
+ * Synchronous internal command (scan). Returns the SCSI result word or KPI_EXEC_*. `s` can live on the stack: the claim
+ * bit gives the command either to scsi_done() (the callback is then queued and is waited for) or to the timeout path
+ * (scsi_done() then never calls back).
+ */
 static int kpi_exec(struct scsi_device *sdev, const unsigned char *cdb, int cdb_len, int dir, void *buf, unsigned int len)
 {
 	struct kpi_sync s;
+	struct kpi_cmd *k;
 	int ret;
 
 	init_completion(&s.done);
-	ret = kpi_scsi_submit(sdev, cdb, cdb_len, dir, buf, len, kpi_sync_done, &s);
-	if (ret)
-		return -1;
-	if (!wait_for_completion_timeout(&s.done, 15 * HZ))
-		return -1;
+	if (__kpi_scsi_submit(sdev, cdb, cdb_len, dir, buf, len, kpi_sync_done, &s, &k))
+		return KPI_EXEC_FAILED;
+	if (!wait_for_completion_timeout(&s.done, 15 * HZ)) {
+		if (!test_and_set_bit(0, &k->claimed)) {
+			pr_warn("kpi6_scsi: command %02x timed out, aborting\n", cdb[0]);
+			ret = kpi_eh(&k->cmd) == SUCCESS ? KPI_EXEC_FAILED : KPI_EXEC_STUCK;
+			kpi_cmd_put(k);	/* the completion path's reference goes with a late scsi_done(), if any */
+			return ret;
+		}
+		/* scsi_done() won the race just after the timeout: its callback is queued, wait for it */
+		wait_for_completion(&s.done);
+	}
+	kpi_cmd_put(k);
 	return s.result;
 }
 
@@ -208,7 +260,8 @@ static void kpi_copy_field(char *dst, const unsigned char *src, int n)
 	memcpy(dst, src, n);
 }
 
-static void kpi_scan_lun(struct Scsi_Host *sh, unsigned int id, u64 lun)
+/* Returns false if the host stopped responding (a command could not be aborted): stop scanning it. */
+static bool kpi_scan_lun(struct Scsi_Host *sh, unsigned int id, u64 lun)
 {
 	struct scsi_device *sdev;
 	unsigned char inq_cdb[6] = { INQUIRY, 0, 0, 0, 36, 0 };
@@ -217,11 +270,11 @@ static void kpi_scan_lun(struct Scsi_Host *sh, unsigned int id, u64 lun)
 	int res, tries;
 
 	if (!inq)
-		return;
+		return true;
 	sdev = kzalloc(sizeof(*sdev), GFP_KERNEL);
 	if (!sdev) {
 		kfree(inq);
-		return;
+		return true;
 	}
 	sdev->host = sh;
 	sdev->id = id;
@@ -246,8 +299,11 @@ static void kpi_scan_lun(struct Scsi_Host *sh, unsigned int id, u64 lun)
 		goto drop;
 	/* a few TEST UNIT READYs let a device that is still spinning up wake (errors are ignored) */
 	for (tries = 0; tries < 2; tries++)
-		kpi_exec(sdev, tur, 6, DMA_NONE, NULL, 0);
+		if (kpi_exec(sdev, tur, 6, DMA_NONE, NULL, 0) == KPI_EXEC_STUCK)
+			goto stuck;
 	res = kpi_exec(sdev, inq_cdb, 6, DMA_FROM_DEVICE, inq, 36);
+	if (res == KPI_EXEC_STUCK)
+		goto stuck;
 	if (res != 0 || (inq[0] & 0xe0) == 0x20 || (inq[0] & 0x1f) == 0x1f) {
 		pr_info("kpi6_scsi: %d:0:%u:%llu: no device (result %x)\n", sh->host_no, id, (unsigned long long)lun, res);
 		if (sh->hostt->slave_destroy)
@@ -267,10 +323,16 @@ static void kpi_scan_lun(struct Scsi_Host *sh, unsigned int id, u64 lun)
 	kfree(inq);
 	if (kpi_scsi_hook)
 		kpi_scsi_hook(sdev, 1);
-	return;
+	return true;
 drop:
 	kfree(inq);
 	kfree(sdev);
+	return true;
+stuck:
+	/* the driver may still write into `inq` and reference `sdev`: leave both allocated */
+	pr_err("kpi6_scsi: %d:0:%u:%llu: device does not respond and could not be reset; ignoring host\n", sh->host_no, id,
+	       (unsigned long long)lun);
+	return false;
 }
 
 void scsi_scan_host(struct Scsi_Host *sh)
@@ -282,7 +344,8 @@ void scsi_scan_host(struct Scsi_Host *sh)
 		if ((int)id == sh->this_id)
 			continue;
 		for (lun = 0; lun < sh->max_lun; lun++)
-			kpi_scan_lun(sh, id, lun);
+			if (!kpi_scan_lun(sh, id, lun))
+				return;
 	}
 }
 void scsi_remove_host(struct Scsi_Host *sh) { }

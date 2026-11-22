@@ -458,16 +458,21 @@ blk_status_t blk_execute_rq(struct request *rq, bool at_head)
 {
 	struct kpi_sync s;
 	unsigned long to = (rq->timeout ? rq->timeout : 30 * HZ) * 2;
+	unsigned int tries = 0;
 
 	init_completion(&s.done);
 	rq->end_io = kpi_sync_end;
 	rq->end_io_data = &s;
 	kpi_dispatch(rq);
-	if (!wait_for_completion_timeout(&s.done, to)) {
-		pr_err("kpi4_blk: request tag %d timed out\n", rq->tag);
+	/*
+	 * Like blk-mq, never let go of an in-flight request: `s`, the request and its bios stay referenced by the driver until
+	 * it completes. Each time the wait expires, run the driver's timeout handler again (NVMe escalates from an abort to
+	 * a controller reset, and a reset cancels every outstanding request), and wait for the completion it causes.
+	 */
+	while (!wait_for_completion_timeout(&s.done, to)) {
+		pr_err("kpi4_blk: request tag %d timed out (attempt %u)\n", rq->tag, ++tries);
 		if (rq->q->mq_ops->timeout)
 			rq->q->mq_ops->timeout(rq);
-		wait_for_completion_timeout(&s.done, to);
 	}
 	return s.status;
 }

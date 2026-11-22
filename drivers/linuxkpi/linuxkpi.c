@@ -14,17 +14,11 @@
 static PLKPI_MODULE LkpiModules[LKPI_MAX_MODULES];
 static ULONG LkpiModuleCount;
 
-static VOID
-LkpiUnload(PDRIVER_OBJECT DriverObject)
-{
-    while (LkpiModuleCount)
-    {
-        PLKPI_MODULE M = LkpiModules[--LkpiModuleCount];
-        LkpiRunExit(M);
-        LkpiFreeModule(M);
-    }
-    DbgPrint("LKPI: unloaded\n");
-}
+/*
+ * There is no DriverUnload: once a Linux module has run, its worker threads, timers, interrupt handlers and the disk
+ * devices built on it reference module code, and Linux drivers' exit paths assume a kernel that can stop all of that.
+ * Like other boot storage drivers, the host stays loaded until shutdown.
+ */
 
 /* CREATE/CLOSE/CLEANUP/DEVICE_CONTROL are shared by the DRM nodes and the disk devices */
 static NTSTATUS NTAPI
@@ -100,7 +94,6 @@ DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
     DriverObject->MajorFunction[IRP_MJ_INTERNAL_DEVICE_CONTROL] = LkDiskScsi;
     DriverObject->MajorFunction[IRP_MJ_PNP] = LkDiskPnp;
     DriverObject->MajorFunction[IRP_MJ_POWER] = LkDiskPower;
-    DriverObject->DriverUnload = LkpiUnload;
 
     for (i = 0; i < LKPI_MODULE_COUNT && i < LKPI_MAX_MODULES; i++)
     {
