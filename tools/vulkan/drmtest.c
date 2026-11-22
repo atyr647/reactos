@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdarg.h>
-#include "../drivers/linuxkpi/lkpi_drm.h"
+#include "../../drivers/linuxkpi/lkpi_drm.h"
 
 static void L(const char *fmt, ...) { char b[400]; va_list a; va_start(a, fmt); vsnprintf(b, sizeof b - 2, fmt, a); va_end(a); strcat(b, "\n"); OutputDebugStringA(b); }
 

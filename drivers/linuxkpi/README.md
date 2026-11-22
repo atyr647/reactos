@@ -161,7 +161,7 @@ pages a process still maps are not handed out again until the mapping lets go (`
 that races with a move cannot land in someone else's page. A process-exit notify routine removes mappings whose
 process exits while another process still holds the handle.
 
-`drmkms` (QEMU, bochs): create a 1280x800 dumb buffer, map it (4,096,000 bytes), draw and read back with 0 mismatches,
+`tools/vulkan/drmkms.c` (QEMU, bochs): create a 1280x800 dumb buffer, map it (4,096,000 bytes), draw and read back with 0 mismatches,
 set the mode on it (the buffer moves to VRAM), draw a checkerboard through the same pointer and read it back with 0
 mismatches; a QEMU screendump of the display shows the checkerboard. Unmap leaves the range `MEM_FREE`; exiting with
 the buffer mapped, also while a child process holds the handle, leaves no trace and a second run passes.
