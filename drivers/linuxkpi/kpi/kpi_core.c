@@ -458,7 +458,12 @@ void *memset(void *d, int c, size_t n)
 EXPORT_SYMBOL(memcpy); EXPORT_SYMBOL(memmove); EXPORT_SYMBOL(memset);
 
 /* ---- slab ----------------------------------------------------------------------------------- */
-struct kmem_cache { unsigned int size; const char *name; };
+/*
+ * Caches have no slabs here: every object comes from the host heap and goes back to it on free. The constructor must
+ * therefore run on every allocation: Linux guarantees that objects come out of a cache in their constructed state
+ * (the XArray/radix tree, for one, relies on radix_tree_node_ctor() having zeroed each node).
+ */
+struct kmem_cache { unsigned int size; const char *name; void (*ctor)(void *); };
 static struct kmem_cache kpi_dummy_cache;
 struct kmem_cache *kmalloc_caches[NR_KMALLOC_TYPES][KMALLOC_SHIFT_HIGH + 1] = { { &kpi_dummy_cache } };
 
@@ -468,12 +473,21 @@ void *__kmalloc_node_noprof(size_t size, gfp_t flags, int node) { return nt_allo
 struct kmem_cache *__kmem_cache_create_args(const char *name, unsigned int size, struct kmem_cache_args *args, slab_flags_t flags)
 {
 	struct kmem_cache *c = nt_alloc(sizeof(*c), 1);
-	if (c) { c->size = size; c->name = name; }
+	if (c) { c->size = size; c->name = name; c->ctor = args ? args->ctor : NULL; }
 	return c;
 }
 void kmem_cache_destroy(struct kmem_cache *s) { nt_free(s); }
-void *kmem_cache_alloc_noprof(struct kmem_cache *s, gfp_t flags) { return nt_alloc(s->size, !!(flags & __GFP_ZERO)); }
-void *kmem_cache_alloc_lru_noprof(struct kmem_cache *s, struct list_lru *lru, gfp_t flags) { return nt_alloc(s->size, !!(flags & __GFP_ZERO)); }
+static void *kpi_cache_alloc(struct kmem_cache *s, gfp_t flags)
+{
+	void *p = nt_alloc(s->size, !!(flags & __GFP_ZERO));
+
+	if (p && s->ctor)
+		s->ctor(p);
+	return p;
+}
+void *kmem_cache_alloc_noprof(struct kmem_cache *s, gfp_t flags) { return kpi_cache_alloc(s, flags); }
+void *kmem_cache_alloc_lru_noprof(struct kmem_cache *s, struct list_lru *lru, gfp_t flags) { return kpi_cache_alloc(s, flags); }
+void *kmem_cache_alloc_node_noprof(struct kmem_cache *s, gfp_t flags, int node) { return kpi_cache_alloc(s, flags); }
 void kmem_cache_free(struct kmem_cache *s, void *p) { nt_free(p); }
 char *kstrdup(const char *s, gfp_t gfp)
 {

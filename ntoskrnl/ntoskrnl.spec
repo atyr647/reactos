@@ -1464,6 +1464,7 @@
 @ stdcall ZwEnumerateDriverEntries(ptr ptr)
 @ stdcall ZwEnumerateKey(ptr long long ptr long ptr)
 @ stdcall ZwEnumerateValueKey(ptr long long ptr long ptr)
+@ stdcall ZwFlushBuffersFile(ptr ptr)
 @ stdcall ZwFlushInstructionCache(ptr ptr long)
 @ stdcall ZwFlushKey(ptr)
 @ stdcall ZwFlushVirtualMemory(ptr ptr ptr ptr)

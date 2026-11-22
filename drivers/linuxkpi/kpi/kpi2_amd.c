@@ -280,7 +280,22 @@ int power_supply_is_system_supplied(void) { return 1; }
 const char *acpi_format_exception(acpi_status status) { return "AE_NOT_FOUND"; }
 acpi_status acpi_get_handle(acpi_handle parent, const char *pathname, acpi_handle *ret_handle) { return AE_NOT_FOUND; }
 acpi_status acpi_get_name(acpi_handle handle, u32 name_type, struct acpi_buffer *buffer) { return AE_NOT_FOUND; }
-acpi_status acpi_get_table(char *signature, u32 instance, struct acpi_table_header **out_table) { return AE_NOT_FOUND; }
+/* Static tables come from the HAL's table cache (VFCT: the VBIOS image the UEFI firmware posted). Only the first
+ * instance of a signature is reachable. */
+extern void *nt_acpi_get_table(const char *sig);
+acpi_status acpi_get_table(char *signature, u32 instance, struct acpi_table_header **out_table)
+{
+	struct acpi_table_header *t;
+
+	if (instance != 1 || !signature || strlen(signature) != 4)
+		return AE_NOT_FOUND;
+	t = nt_acpi_get_table(signature);
+	if (!t)
+		return AE_NOT_FOUND;
+	*out_table = t;
+	return AE_OK;
+}
+void acpi_put_table(struct acpi_table_header *table) { }
 acpi_status acpi_evaluate_object(acpi_handle handle, acpi_string pathname, struct acpi_object_list *args, struct acpi_buffer *buffer) { return AE_NOT_FOUND; }
 union acpi_object *acpi_evaluate_dsm(acpi_handle handle, const guid_t *guid, u64 rev, u64 func, union acpi_object *argv4) { return NULL; }
 struct acpi_device *acpi_dev_get_first_match_dev(const char *hid, const char *uid, s64 hrv) { return NULL; }
@@ -373,8 +388,48 @@ struct pci_dev *pci_get_base_class(unsigned int class, struct pci_dev *from) { r
 struct pci_dev *pci_get_domain_bus_and_slot(int domain, unsigned int bus, unsigned int devfn) { return NULL; }
 void pci_ignore_hotplug(struct pci_dev *dev) { }
 int pci_load_saved_state(struct pci_dev *dev, struct pci_saved_state *state) { return 0; }
-void __iomem *pci_map_rom(struct pci_dev *pdev, size_t *size) { *size = 0; return NULL; }
-void pci_unmap_rom(struct pci_dev *pdev, void __iomem *rom) { }
+/* The expansion ROM BAR: size it, enable decoding, map it. Returns the image size in *size (ROM images may be shorter). */
+void __iomem *pci_map_rom(struct pci_dev *pdev, size_t *size)
+{
+	u32 orig, sz;
+	void __iomem *rom;
+	unsigned long len;
+
+	*size = 0;
+	if (pdev->hdr_type != PCI_HEADER_TYPE_NORMAL)
+		return NULL;
+	pci_read_config_dword(pdev, PCI_ROM_ADDRESS, &orig);
+	pci_write_config_dword(pdev, PCI_ROM_ADDRESS, PCI_ROM_ADDRESS_MASK);
+	pci_read_config_dword(pdev, PCI_ROM_ADDRESS, &sz);
+	pci_write_config_dword(pdev, PCI_ROM_ADDRESS, orig);
+	sz &= PCI_ROM_ADDRESS_MASK;
+	if (!sz || !(orig & PCI_ROM_ADDRESS_MASK))
+		return NULL;			/* no ROM, or the firmware did not assign it an address */
+	len = (~sz + 1) & 0xffffffff;
+	pci_write_config_dword(pdev, PCI_ROM_ADDRESS, orig | PCI_ROM_ADDRESS_ENABLE);
+	rom = ioremap(orig & PCI_ROM_ADDRESS_MASK, len);
+	if (!rom) {
+		pci_write_config_dword(pdev, PCI_ROM_ADDRESS, orig);
+		return NULL;
+	}
+	if (readw(rom) != 0xAA55) {
+		iounmap(rom);
+		pci_write_config_dword(pdev, PCI_ROM_ADDRESS, orig);
+		return NULL;
+	}
+	*size = len;
+	return rom;
+}
+void pci_unmap_rom(struct pci_dev *pdev, void __iomem *rom)
+{
+	u32 v;
+
+	if (!rom)
+		return;
+	iounmap(rom);
+	pci_read_config_dword(pdev, PCI_ROM_ADDRESS, &v);
+	pci_write_config_dword(pdev, PCI_ROM_ADDRESS, v & ~PCI_ROM_ADDRESS_ENABLE);
+}
 bool pci_pr3_present(struct pci_dev *pdev) { return false; }
 u32 pci_rebar_get_possible_sizes(struct pci_dev *pdev, int bar) { return 0; }
 void pci_release_resource(struct pci_dev *dev, int resno) { }

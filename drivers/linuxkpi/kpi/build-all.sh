@@ -42,3 +42,23 @@ for m in $MODS; do
 done
 echo -n "$LIST" > "$OUT/modules.list"
 echo "built: $LIST"
+
+# The GPU group (cmake -DLKPI_GPU_MODULES="$(cat <workdir>/out/gpu_modules.list)"): loaded only with the boot option
+# /LINUXKPI_GPU, after the system volume is mounted. DRM core and helpers, amdgpu (Radeon), bochs (QEMU/Bochs VGA).
+GPU_MODS="drivers/gpu/drm/drm drivers/gpu/drm/drm_kms_helper drivers/gpu/drm/ttm/ttm drivers/gpu/drm/drm_ttm_helper \
+drivers/gpu/drm/display/drm_display_helper drivers/gpu/drm/scheduler/gpu-sched drivers/gpu/drm/drm_exec \
+drivers/gpu/drm/drm_buddy drivers/gpu/drm/drm_suballoc_helper drivers/gpu/drm/drm_vram_helper \
+drivers/gpu/drm/amd/amdxcp/amdxcp drivers/gpu/drm/amd/amdgpu/amdgpu drivers/gpu/drm/tiny/bochs"
+make -C "$SRC" -j"$(nproc)" -k KBUILD_MODPOST_WARN=1 KCFLAGS="$KC" $(for m in $GPU_MODS; do echo -n "$m.ko "; done) >"$WORK/gpu.log" 2>&1 || true
+mkdir -p "$OUT/gpu"
+GLIST=""
+for m in $GPU_MODS; do
+  [ -f "$SRC/$m.ko" ] || { echo "missing $m.ko (see $WORK/gpu.log)"; exit 1; }
+  cp "$SRC/$m.ko" "$OUT/gpu/"
+  GLIST="$GLIST${GLIST:+;}$OUT/gpu/$(basename "$m").ko"
+done
+echo -n "$GLIST" > "$OUT/gpu_modules.list"
+echo "GPU group: $GLIST"
+
+# firmware for the CD (cmake -DLKPI_FIRMWARE_DIR=<workdir>/out/firmware), pinned and checksummed
+"$HERE/fetch-firmware.sh" "$OUT/firmware"

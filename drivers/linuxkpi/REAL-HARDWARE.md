@@ -11,9 +11,11 @@ order; stop at the first step that fails and capture the evidence (photo of the 
 * Local: `cmake -DARCH=amd64 -DCMAKE_BUILD_TYPE=Release -DDLL_EXPORT_VERSION=0xA00 ...; ninja bootcd`.
 
 The workflow builds the Linux 6.12 modules from a pristine kernel tarball (`drivers/linuxkpi/kpi/build-all.sh`, verified
-locally from scratch, not yet run on GitHub) and puts NVMe, USB xHCI and HID on the ISO. The LinuxKPI host then loads at
-system start. If a PC misbehaves with it, choose **"ReactOS Live Environment (without Linux drivers)"** in the boot menu
-(boot option `/NOLINUXKPI`). The amdgpu/DRM modules are not part of the ISO yet.
+locally from scratch, not yet run on GitHub): NVMe, USB (xHCI, HID, mass storage) and Ethernet (r8169, igc, e1000e, igb)
+load at system start; the GPU group (DRM + amdgpu) is on the ISO too but only loads from the experimental boot entry
+(section 5). It also fetches the needed firmware (`drivers/linuxkpi/kpi/fetch-firmware.sh`). If a PC misbehaves with the
+Linux drivers, choose **"ReactOS Live Environment (without Linux drivers)"** in the boot menu (boot option
+`/NOLINUXKPI`).
 
 ## 1. Test in a VM first (do this before touching hardware)
 
@@ -31,18 +33,23 @@ qemu-system-x86_64 -machine q35 -cpu Nehalem -smp 4 -m 4096 \
 
 | # | Item | What to expect |
 |---|---|---|
-| 1 | Release build | No debug prompts/asserts. **Verified:** Release amd64 (0xA00) ISO, 333 MB, builds with 0 failures and boots to the LiveCD GUI under QEMU/OVMF (UEFI, q35, `-cpu Nehalem`, 4 vCPUs). |
+| 1 | Release build | No debug prompts/asserts. **Verified:** Release amd64 (0xA00) ISO builds with 0 failures and boots to the LiveCD GUI under QEMU/OVMF (UEFI, q35, `-cpu Nehalem`, 4 vCPUs). |
 | 2 | UEFI boot of the ISO | Disable Secure Boot in firmware (ReactOS loaders are unsigned). Boot the USB in UEFI mode. Write the ISO with `dd` (hybrid) or Rufus in **DD mode**. |
-| 3 | Keyboard/mouse + boot from USB | After UEFI exit, USB input may be dead on xHCI-only boards (no legacy emulation). The Linux xHCI/HID stack now provides keyboard and mouse in the live environment once it has loaded (the boot menu itself and the first seconds of boot still depend on firmware USB support). USB mass storage works in the live environment via Linux `usb-storage` (verified in QEMU); a USB stick is not yet usable as the *boot* medium. Needs a USB mass-storage path that works on the board's xHCI. ReactOS xHCI support is weak; if the stick is not seen, try a USB 2.0 port / BIOS "xHCI hand-off". |
-| 4 | NVMe | ReactOS has no native NVMe driver. The LinuxKPI NVMe path works in QEMU (loaded at boot; read+write, FAT volume mounted, see README) and is on the CI ISO, but only the *live* environment sees it: Setup (text mode) does not load it yet, so installing onto NVMe is not possible yet. Interrupts use MSI-X (verified in QEMU; real SSDs untested). |
-| 5 | SMP | 5950X = 32 threads. Untested; if it hangs early, set `/ONECPU` (or `/NUMPROC=4`) in freeldr.ini. |
-| 6 | Network | Realtek 2.5GbE / Intel I225 boards: no driver known to be present. Assume no network. |
-| 7 | Display | Without the amdgpu path the 7900 XT is driven by GOP framebuffer only (no acceleration). |
-| 8 | amdgpu via LinuxKPI | MSI/MSI-X now exist; still needs firmware blobs, VBIOS/ACPI, GEM mmap and a user-mode stack. |
+| 3 | Keyboard/mouse + USB sticks | The Linux xHCI/HID stack provides keyboard and mouse once it has loaded (the boot menu and the first seconds still depend on firmware USB support). USB sticks work as disks (read/write, flushed at shutdown), and the stick the ISO was written to can be the boot medium: pick a "USB stick / RAM disk" entry. All verified in QEMU. |
+| 4 | NVMe | Linux NVMe driver at boot (MSI-X): Setup lists the disk, installs onto it, and the installed system boots from it alone. Verified in QEMU; real SSDs untested. |
+| 5 | SMP | 5950X = 32 threads. Untested; if it hangs early, set `/ONECPU` (or `/NUMPROC=4`) in freeldr.ini. The Linux modules now use locked atomics on every CPU (they were built uniprocessor and did not). |
+| 6 | Network | Linux drivers behind an NDIS miniport: **r8169** (Realtek RTL8111/8168/8125/8126, most X570/B550 boards), **igc** (Intel I225-V/I226-V), **e1000e**, **igb**. e1000e and igb are verified in QEMU (DHCP, ping, 64 MiB each way over TCP, no corrupted byte); r8169 and igc load but have never seen their hardware. Realtek firmware patches are on the CD. |
+| 7 | Display | The 7900 XT is driven by the GOP framebuffer (no acceleration) unless the experimental GPU entry is used (section 5). |
+| 8 | amdgpu via LinuxKPI | See section 5: builds and loads, never run on an AMD GPU. No display core (DC) and no user-mode Vulkan stack yet. |
 
 ## 3. What to capture if it fails
 
-* Serial/debug output (`/DEBUG /DEBUGPORT=COM1` in freeldr.ini) or a phone photo of the BSOD / last text.
+* A phone photo of the BSOD or the last text on screen.
+* **The LinuxKPI log on a USB stick** (works on machines without a serial port): format a second USB stick as FAT32,
+  create an empty file named `LKPILOG.TXT` in its root, and leave it plugged in. Everything the Linux drivers print,
+  plus the host's own messages, is appended to it every 200 ms and flushed so it survives a crash or power-off. Only a
+  volume that already has that file is ever written to.
+* Serial output (`/DEBUG /DEBUGPORT=COM1` in freeldr.ini) if the board has a COM port.
 * Motherboard model + BIOS version; whether CSM/Secure Boot were on.
 
 
@@ -71,3 +78,23 @@ the firmware starts FreeLoader from the NVMe disk, `linuxkpi` loads as a boot dr
 Bugs fixed on this path: the arena allocator deadlocked against the NVMe completion interrupt during the large file copy
 (interrupts are now masked while its lock is held); Setup's firmware-disk assumptions (BIOS disks, active partition, `scsi()` ARC
 paths) are bypassed on UEFI.
+
+
+## 5. Experimental: amdgpu on the RX 7900 XT (test only)
+
+Boot menu entry **"ReactOS Live (experimental AMD GPU driver, test only)"**. It boots the live system from RAM and,
+once the system volume is mounted, loads the GPU group: Linux 6.12 DRM core, TTM, the GPU scheduler and `amdgpu`, with
+the Navi 31 firmware from `reactos\system32\firmware\amdgpu` (fetched by `fetch-firmware.sh`, pinned to
+linux-firmware 20241110, checksummed). Debug output goes to the screen; put the `LKPILOG.TXT` stick in (section 3)
+first: the GPU group waits up to 20 s for it so that the driver's first lines are not lost.
+
+What is in place: PCI probe, BARs, MSI/MSI-X, firmware loading, VBIOS from the ACPI VFCT table (the HAL now hands ACPI
+tables to drivers; the log says whether VFCT is present) or the ROM BAR, DRM device nodes for user mode
+(`\\.\LKPIDRM0`, size- and pointer-checked ioctls).
+
+What is not: the display core (DC) is not built, so amdgpu cannot drive a monitor; the screen stays on the UEFI
+framebuffer (if amdgpu's init disturbs it, the screen may go dark: that is what the USB log is for). There is no
+user-mode graphics stack (libdrm, Mesa radv) yet, so no game can use the GPU even if the driver initialises.
+
+The deferred loading path is verified in QEMU with the bochs DRM driver standing in for amdgpu (QEMU cannot emulate a
+Radeon). amdgpu itself has never run on hardware; expect it to stop somewhere during IP block init, and send the log.

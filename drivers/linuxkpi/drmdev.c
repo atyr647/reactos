@@ -120,7 +120,11 @@ NTSTATUS
 LkpiCreateDrmNodes(PDRIVER_OBJECT DriverObject)
 {
     static const int Minors[] = { 0, 128 };
+    static BOOLEAN Created;
     ULONG i;
+
+    if (Created)
+        return STATUS_SUCCESS;
 
     if (!DrmResolve())
     {
@@ -146,6 +150,7 @@ LkpiCreateDrmNodes(PDRIVER_OBJECT DriverObject)
         Dev->Flags &= ~DO_DEVICE_INITIALIZING;
         IoCreateSymbolicLink(&Link, &Name);
         DbgPrint("LKPI: DRM node %wZ created\n", &Name);
+        Created = TRUE;
     }
     return STATUS_SUCCESS;
 }

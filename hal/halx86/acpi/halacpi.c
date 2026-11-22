@@ -787,6 +787,25 @@ HaliAcpiTimerInit(IN ULONG TimerPort,
 }
 
 CODE_SEG("INIT")
+/* HAL_DISPATCH::HalGetCachedAcpiTable: lets drivers read ACPI tables (e.g. VFCT, the GPU's VBIOS image).
+ * PASSIVE_LEVEL. The table stays in the HAL's cache; callers must not free it. */
+static
+PVOID
+NTAPI
+HaliGetCachedAcpiTable(IN ULONG Signature,
+                       IN PCSTR OemId OPTIONAL,
+                       IN PCSTR OemTableId OPTIONAL)
+{
+    PDESCRIPTION_HEADER Table;
+
+    if (KeGetCurrentIrql() > APC_LEVEL) return NULL;
+    Table = HalAcpiGetTable(NULL, Signature);
+    if (!Table) return NULL;
+    if (OemId && strncmp((PCSTR)Table->OEMID, OemId, sizeof(Table->OEMID))) return NULL;
+    if (OemTableId && strncmp((PCSTR)Table->OEMTableID, OemTableId, sizeof(Table->OEMTableID))) return NULL;
+    return Table;
+}
+
 NTSTATUS
 NTAPI
 HalpSetupAcpiPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
@@ -802,6 +821,9 @@ HalpSetupAcpiPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     /* Setup the ACPI table cache */
     Status = HalpAcpiTableCacheInit(LoaderBlock);
     if (!NT_SUCCESS(Status)) return Status;
+
+    /* Drivers can look tables up once the cache exists */
+    HalGetCachedAcpiTable = HaliGetCachedAcpiTable;
 
     /* Grab the FADT */
     Fadt = HalAcpiGetTable(LoaderBlock, FADT_SIGNATURE);

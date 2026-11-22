@@ -236,3 +236,38 @@ in-flight command (completion is now deferred to a worker, and submit retries wh
 `system_freezable_wq`. `kpi/symres.py` maps a crash address to a Linux function (needs `-DLKPI_DEBUG_SECTIONS`).
 Limits: direct-access devices only (no CD-ROM/optical, no UAS), 64 KiB max transfer, no hot-unplug, and USB enumeration is
 asynchronous so a USB boot device may not be present by the time the boot partition is needed.
+
+## Milestone: Linux Ethernet drivers under NDIS (e1000e, igb; r8169, igc built)
+`kpi7_net.c` (in kpi2.ko) is a minimal network core: sk_buff (linear and page-fragment heads, frags, expand/pull/trim/
+pad), `alloc_etherdev_mqs`/`register_netdev`, TX queues with BQL (`lib/dynamic_queue_limits.c`), unicast/multicast lists
+(`net/core/dev_addr_lists.c`, unmodified), NAPI polls in host DPCs (`nt_dpc_alloc`/`nt_dpc_queue`, the NET_RX softirq's
+counterpart), carrier changes reported with the ethtool link speed. Every `net_device` becomes a PDO on the LinuxKPI
+bus (`LKPI\NET_<driver>`, `netbus.c`) offering `LKPI_NET_INTERFACE` (`lkpi_net.h`); `drivers/network/dd/lkpinet` is a
+serialized NDIS 5 miniport for those PDOs, installed by `netlkpi.inf`. TX copies the frame into an skb; RX hands the
+whole frame to `NdisMEthIndicateReceive`; a full TX ring returns `NDIS_STATUS_RESOURCES` until the queue wakes.
+
+Verified in QEMU/OVMF (TCG): e1000e (82574) and igb (82576, 3 MSI-X vectors, page-fragment RX) get a DHCP lease, ping,
+and move 64 MiB each way over TCP with no corrupted byte (`nettest`). Throughput under TCG: e1000e 10.8/14.9 Mbit/s
+down/up, igb 12.0/17.9; ReactOS's own e1000 driver in the same VM: 13.6/30.9 (the extra per-frame copy shows on
+upload). r8169 (with libphy, mdio_devres and the Realtek PHY driver) and igc load and register; no emulated hardware.
+
+## The GPU group, firmware and the USB-stick log
+* `-DLKPI_GPU_MODULES=` embeds a second module list that is loaded only with the boot option `/LINUXKPI_GPU`, from a
+  worker thread, once `\SystemRoot\system32` is reachable (firmware lives there). Boot entry: "ReactOS Live
+  (experimental AMD GPU driver, test only)". Verified with drm + bochs standing in for amdgpu.
+* `-DLKPI_FIRMWARE_DIR=` copies a linux-firmware style tree to `reactos\system32\firmware` on the CD;
+  `fetch-firmware.sh` fetches Navi 31 (amdgpu) and Realtek NIC firmware from a pinned linux-firmware tag and checks
+  sha256 sums.
+* The HAL now fills `HalGetCachedAcpiTable`; `acpi_get_table()` returns real tables (amdgpu reads the VBIOS from VFCT),
+  `pci_map_rom()` maps the expansion ROM. Startup logs whether VFCT is present.
+* `lkpilog.c`: all host and Linux output also goes to a 2 MiB RAM ring that is appended (write-through, flushed) to
+  `X:\LKPILOG.TXT` on any volume where that empty file exists. Survives a hard power-off (checked with `fsck.fat`).
+
+## Bugs found on the way (all pre-existing, all affect real hardware)
+* **Atomics were not atomic.** The modules are built `CONFIG_SMP=n`, where x86 `LOCK_PREFIX` is empty, but run on all
+  CPUs. The tree patch now keeps the `lock` prefix and a real `smp_mb()`.
+* **kmem_cache constructors were ignored.** XArray/IDR/radix-tree nodes rely on `radix_tree_node_ctor()` zeroing them;
+  recycled heap blocks gave nodes garbage slots and intermittent wild writes (found as a crash in DRM minor
+  allocation). Constructors now run on every cache allocation.
+* The heap now detects double frees and free-list corruption and names the Linux callers from the stack.
+* PCI devices had no parent device (`pm_runtime_suspended(dev->parent)` in e1000e dereferenced NULL).

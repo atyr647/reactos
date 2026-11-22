@@ -89,6 +89,7 @@ lx_printk(const char *Fmt, lx_ulong a1, lx_ulong a2, lx_ulong a3, lx_ulong a4, l
  */
 typedef struct _LKPI_BLOCK { lx_ulong Size; lx_ulong Tag; } LKPI_BLOCK;
 #define LKPI_BLOCK_MAGIC 0x4C4B504900000000ULL
+#define LKPI_BLOCK_FREE  0x100ULL       /* the block is on a free list: a second kfree() is a double free */
 #define LKPI_NUM_CLASSES 12            /* 32 .. 64 KiB payload */
 #define LKPI_ARENA_MB    48
 
@@ -130,6 +131,25 @@ static VOID LkpiAllocLockRelease(LKPI_ALLOC_LOCK_STATE *St)
         _enable();
 }
 
+/* Debug aid: print the code addresses inside Linux modules found on the current stack (Linux code has no unwind
+ * data, so the nearest frames are guessed from the stack contents). Any IRQL. */
+static VOID LkpiDumpCallers(PCSTR Why)
+{
+    volatile ULONG_PTR Anchor = 0;
+    ULONG_PTR *Sp = (ULONG_PTR *)&Anchor;      /* scan upwards from this frame into the callers' frames */
+    ULONG i, n = 0;
+    char Sym[96];
+
+    for (i = 0; i < 160 && n < 8; i++)
+    {
+        if (LkpiSymbolize(Sp[i], Sym, sizeof(Sym)))
+        {
+            DbgPrint("LKPI:   %s %s\n", Why, Sym);
+            n++;
+        }
+    }
+}
+
 VOID LkpiInitAllocator(VOID)
 {
     SIZE_T Size = (SIZE_T)LKPI_ARENA_MB << 20;
@@ -167,10 +187,29 @@ void * LX_ABI nt_alloc(lx_ulong Size, int Zero)
         LkpiAllocLockAcquire(&Old);
         if (LkpiFree[c])
         {
+            LKPI_BLOCK *Next;
+
             b = LkpiFree[c];
-            LkpiFree[c] = *(LKPI_BLOCK **)(b + 1);
+            Next = *(LKPI_BLOCK **)(b + 1);
+            /* a free block must still say so, and its link must point into the arena: otherwise something wrote to
+             * freed memory. Drop the list (leaking it) rather than hand out a wild pointer. */
+            if (b->Tag != (LKPI_BLOCK_MAGIC | LKPI_BLOCK_FREE | c) ||
+                (Next && ((PUCHAR)Next < LkpiArena || (PUCHAR)Next >= LkpiArenaEnd)))
+            {
+                LkpiAllocLockRelease(&Old);
+                DbgPrint("LKPI: heap corruption: free block %p (class %lu) tag %I64x link %p: use after free\n",
+                         b, c, (ULONG64)b->Tag, Next);
+                LkpiDumpCallers("corrupt block found by");
+                LkpiAllocLockAcquire(&Old);
+                LkpiFree[c] = NULL;
+                b = NULL;
+            }
+            else
+            {
+                LkpiFree[c] = Next;
+            }
         }
-        else if (LkpiArenaPtr && LkpiArenaPtr + sizeof(LKPI_BLOCK) + Payload <= LkpiArenaEnd)
+        if (!b && LkpiArenaPtr && LkpiArenaPtr + sizeof(LKPI_BLOCK) + Payload <= LkpiArenaEnd)
         {
             b = (LKPI_BLOCK *)LkpiArenaPtr;
             LkpiArenaPtr += sizeof(LKPI_BLOCK) + Payload;
@@ -213,6 +252,14 @@ void LX_ABI nt_free(void *p)
         return;
     }
     LkpiAllocLockAcquire(&Old);
+    if (b->Tag & LKPI_BLOCK_FREE)
+    {
+        LkpiAllocLockRelease(&Old);
+        DbgPrint("LKPI: double free of %p (%I64u bytes)\n", p, (ULONG64)b->Size);
+        LkpiDumpCallers("double free by");
+        return;                     /* keep the free list intact */
+    }
+    b->Tag |= LKPI_BLOCK_FREE;
     *(LKPI_BLOCK **)(b + 1) = LkpiFree[c];
     LkpiFree[c] = b;
     LkpiAllocLockRelease(&Old);
@@ -710,6 +757,17 @@ int LX_ABI nt_dpc_queue(void *Handle)
     return Handle && KeInsertQueueDpc(&((PLKPI_DPC)Handle)->Dpc, NULL, NULL) ? 1 : 0;
 }
 
+/* An ACPI table (4-character signature) from the HAL's cache, PASSIVE_LEVEL; NULL if absent. Not to be freed. */
+void * LX_ABI nt_acpi_get_table(const char *Sig)
+{
+    ULONG Signature;
+
+    if (!HalGetCachedAcpiTable || KeGetCurrentIrql() > APC_LEVEL)
+        return NULL;
+    RtlCopyMemory(&Signature, Sig, sizeof(Signature));
+    return HalGetCachedAcpiTable(Signature, NULL, NULL);
+}
+
 /* Wall clock in nanoseconds since 1970 */
 unsigned long long LX_ABI nt_real_ns(void)
 {
@@ -761,6 +819,7 @@ const LKPI_EXPORT LkpiExports[] =
     { "nt_dpc_alloc", (PVOID)nt_dpc_alloc },
     { "nt_dpc_queue", (PVOID)nt_dpc_queue },
     { "nt_real_ns", (PVOID)nt_real_ns },
+    { "nt_acpi_get_table", (PVOID)nt_acpi_get_table },
     { "nt_read_firmware", (PVOID)nt_read_firmware },
     { "nt_current_tid", (PVOID)nt_current_tid },
     { "nt_raise_dispatch", (PVOID)nt_raise_dispatch },

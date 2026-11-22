@@ -1,5 +1,5 @@
 
-add_library(linuxkpi MODULE linuxkpi.c elfldr.c shim.c drmdev.c input.c lkpidisk.c netbus.c linuxkpi.rc)
+add_library(linuxkpi MODULE linuxkpi.c elfldr.c shim.c drmdev.c input.c lkpidisk.c netbus.c lkpilog.c linuxkpi.rc)
 set_module_type(linuxkpi kernelmodedriver)
 add_importlibs(linuxkpi ntoskrnl hal)
 target_link_libraries(linuxkpi ${PSEH_LIB})
@@ -27,6 +27,43 @@ if(_lkpi_count GREATER 0)
     target_sources(linuxkpi PRIVATE ${_lkpi_s})
     set_source_files_properties(${_lkpi_s} PROPERTIES OBJECT_DEPENDS "${LKPI_MODULES}")
     target_compile_definitions(linuxkpi PRIVATE LKPI_EMBEDDED)
+endif()
+
+# GPU drivers (cmake -DLKPI_GPU_MODULES="drm.ko;...;amdgpu.ko"): embedded as a second group that is loaded only with
+# the boot option /LINUXKPI_GPU, once the system volume (and its firmware directory) is mounted.
+set(LKPI_GPU_MODULES "" CACHE STRING "Linux GPU .ko files to embed (loaded with /LINUXKPI_GPU), in load order")
+set(_lkpi_gpu_count 0)
+set(_lkpi_gpu_asm "    .section .rdata,\"dr\"\n    .balign 16\n")
+set(_lkpi_gpu_tbl "")
+foreach(_m ${LKPI_GPU_MODULES})
+    if(EXISTS "${_m}")
+        set(_lkpi_gpu_asm "${_lkpi_gpu_asm}lkpigpu${_lkpi_gpu_count}_start:\n    .incbin \"${_m}\"\nlkpigpu${_lkpi_gpu_count}_end:\n    .balign 16\n")
+        set(_lkpi_gpu_tbl "${_lkpi_gpu_tbl}    .quad lkpigpu${_lkpi_gpu_count}_start, lkpigpu${_lkpi_gpu_count}_end\n")
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_m}")
+        math(EXPR _lkpi_gpu_count "${_lkpi_gpu_count} + 1")
+    endif()
+endforeach()
+target_compile_definitions(linuxkpi PRIVATE LKPI_GPU_MODULE_COUNT=${_lkpi_gpu_count})
+if(_lkpi_gpu_count GREATER 0)
+    set(_lkpi_gpu_s "${CMAKE_CURRENT_BINARY_DIR}/lkpigpu.S")
+    file(WRITE ${_lkpi_gpu_s}.tmp "${_lkpi_gpu_asm}    .globl LkpiEmbeddedGpuTable\nLkpiEmbeddedGpuTable:\n${_lkpi_gpu_tbl}")
+    execute_process(COMMAND ${CMAKE_COMMAND} -E copy_if_different ${_lkpi_gpu_s}.tmp ${_lkpi_gpu_s})
+    target_sources(linuxkpi PRIVATE ${_lkpi_gpu_s})
+    set_source_files_properties(${_lkpi_gpu_s} PROPERTIES OBJECT_DEPENDS "${LKPI_GPU_MODULES}")
+endif()
+
+# Firmware (cmake -DLKPI_FIRMWARE_DIR=<dir>, laid out as in linux-firmware: amdgpu/..., rtl_nic/...): copied to
+# reactos/system32/firmware on the CD, where request_firmware() looks.
+set(LKPI_FIRMWARE_DIR "" CACHE PATH "Directory with Linux firmware files for the CD (linux-firmware layout)")
+if(LKPI_FIRMWARE_DIR AND EXISTS "${LKPI_FIRMWARE_DIR}")
+    file(GLOB_RECURSE _lkpi_fw RELATIVE "${LKPI_FIRMWARE_DIR}" "${LKPI_FIRMWARE_DIR}/*")
+    foreach(_f ${_lkpi_fw})
+        get_filename_component(_d "${_f}" DIRECTORY)
+        if(_d)
+            set(_d "/${_d}")
+        endif()
+        add_cd_file(FILE "${LKPI_FIRMWARE_DIR}/${_f}" DESTINATION reactos/system32/firmware${_d} NO_CAB FOR all)
+    endforeach()
 endif()
 
 # With modules on the CD the host starts at system start (the boot option /NOLINUXKPI skips it); without any it
