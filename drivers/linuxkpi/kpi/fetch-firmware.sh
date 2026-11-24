@@ -4,7 +4,8 @@
 # Files land in <outdir>/amdgpu/..., <outdir>/rtl_nic/... (request_firmware() names), copied by the build to
 # reactos\system32\firmware on the CD. Licences: LICENSE.amdgpu (redistributable) and Realtek's notice from WHENCE,
 # which must accompany the rtl_nic files.
-#   amdgpu: Navi 31 (Radeon RX 7900 XT/XTX: GC 11.0.0, PSP/SMU 13.0.0, SDMA 6.0.0, VCN 4.0.0; no DCN, DC is off)
+#   amdgpu: Navi 31 (Radeon RX 7900 XT/XTX: GC 11.0.0, PSP/SMU 13.0.0, SDMA 6.0.0, VCN 4.0.0, DCN 3.2.0 DMCUB for the
+#           display core)
 #   rtl_nic: every patch r8169 may load (RTL8111/8168/8125/8126)
 set -euo pipefail
 TAG=20241110
@@ -24,6 +25,7 @@ while read -r sum file; do
   echo "$sum  $file" | sha256sum -c --quiet -
 done <<'SUMS'
 572872598565dc3513470de971a32bf9db301f47afeef3636345eadae33b2eee  LICENSE.amdgpu
+4307fd096e57c4aa4744d97d36f0de71c3439724f1174c71131448bd6dd04d9b  amdgpu/dcn_3_2_0_dmcub.bin
 b4f8fc056b45709a6abf48e7885fb1b4ab8d3cc092cbfa2c554a78564a6403bc  amdgpu/gc_11_0_0_imu.bin
 7ff26c66610e116d6cd874502244e82dadcfc20849973bf142601585c969e6c6  amdgpu/gc_11_0_0_me.bin
 4e309076b9caa7f7c0daec15b4c3bdad346ab514ff09a9b17770c6733ea491ae  amdgpu/gc_11_0_0_mec.bin

@@ -20,9 +20,9 @@ SRCS="hdmi.c kfifo.c genalloc.c pci-quirks.c $(for f in $NETX; do echo -n "$(bas
 make -C "$SRC" -j"$(nproc)" -k KBUILD_MODPOST_WARN=1 KCFLAGS="-mcmodel=small -fPIC -mpreferred-stack-boundary=4" "KPI2_SRCS=$SRCS" modules M="$OUT" 2>&1 | grep -E "error|Error|warning: .*undefined|kpi2.ko" | grep -v WARNING | head -40
 ls -la "$OUT"/kpi2.ko
 
-# optional self test module: build2.sh <tree> <out2> test  -> $OUT/kpi2test.ko
+# optional self test modules: build2.sh <tree> <out2> test  -> $OUT/test/{kpi2test,fputest}.ko
 if [ "$3" = "test" ]; then
-  T="$OUT/test"; mkdir -p "$T"; cp "$HERE/test/kpi2test.c" "$HERE/test/Kbuild" "$T/"
-  make -C "$SRC" -j"$(nproc)" -k KBUILD_MODPOST_WARN=1 KCFLAGS="-mcmodel=small -fPIC -mpreferred-stack-boundary=4" modules M="$T" 2>&1 | grep -E " error|kpi2test.ko" | head
-  ls -la "$T"/kpi2test.ko
+  T="$OUT/test"; mkdir -p "$T"; cp "$HERE/test/kpi2test.c" "$HERE/test/fputest.c" "$HERE/test/Kbuild" "$T/"
+  make -C "$SRC" -j"$(nproc)" -k KBUILD_MODPOST_WARN=1 KCFLAGS="-mcmodel=small -fPIC -mpreferred-stack-boundary=4" modules M="$T" 2>&1 | grep -E " error|test.ko" | head
+  ls -la "$T"/kpi2test.ko "$T"/fputest.ko
 fi

@@ -103,6 +103,8 @@ void *vmalloc_noprof(unsigned long size) { return __kmalloc_noprof(size, GFP_KER
 void *kvrealloc_noprof(const void *p, size_t size, gfp_t flags) { return krealloc_noprof(p, size, flags); }
 int dmi_get_system_info_dummy;
 const char *dmi_get_system_info(int field) { return NULL; }
+/* no DMI tables are read: no system-specific quirk matches (amdgpu's display core keeps per-laptop quirk lists) */
+const struct dmi_system_id *dmi_first_match(const struct dmi_system_id *list) { return NULL; }
 int __cpuhp_setup_state(enum cpuhp_state state, const char *name, bool invoke, int (*startup)(unsigned int), int (*teardown)(unsigned int), bool multi_instance) { return 0; }
 void mmu_notifier_synchronize(void) { }
 void rcu_barrier(void) { }
@@ -112,6 +114,7 @@ bool cancel_work(struct work_struct *work) { return cancel_work_sync(work); }
 unsigned int jiffies_to_usecs(const unsigned long j) { return j * (1000000 / HZ); }
 unsigned long nsecs_to_jiffies(u64 n) { return nsecs_to_jiffies64(n); }
 u64 ktime_get_mono_fast_ns(void) { return nt_ktime_ns(); }
+ktime_t ktime_get_raw(void) { return (ktime_t)nt_ktime_ns(); }	/* the monotonic clock is never slewed here */
 time64_t ktime_get_real_seconds(void) { return nt_ktime_ns() / NSEC_PER_SEC; }
 ktime_t ktime_get_with_offset(enum tk_offsets offs) { return nt_ktime_ns(); }
 void time64_to_tm(time64_t totalsecs, int offset, struct tm *result)
@@ -313,7 +316,56 @@ struct device *hwmon_device_register_with_groups(struct device *dev, const char 
 	return hd ? hd : ERR_PTR(-ENOMEM);
 }
 void hwmon_device_unregister(struct device *dev) { kfree(dev); }
-int i2c_add_adapter(struct i2c_adapter *adap) { return 0; }
+/*
+ * i2c core, the part DRM drivers use: an adapter is registered by the driver (amdgpu's display core: one per
+ * connector for DDC; DRM's DP helper: one per AUX channel) and EDID is read with i2c_transfer() through the
+ * adapter's own master_xfer. No i2c device model, no client probing, no /dev/i2c-N.
+ */
+static DEFINE_MUTEX(kpi_i2c_bus_lock);		/* one lock for adapters without their own lock_ops */
+
+static void kpi_i2c_lock_bus(struct i2c_adapter *adap, unsigned int flags) { mutex_lock(&kpi_i2c_bus_lock); }
+static int kpi_i2c_trylock_bus(struct i2c_adapter *adap, unsigned int flags) { return mutex_trylock(&kpi_i2c_bus_lock); }
+static void kpi_i2c_unlock_bus(struct i2c_adapter *adap, unsigned int flags) { mutex_unlock(&kpi_i2c_bus_lock); }
+
+static const struct i2c_lock_operations kpi_i2c_lock_ops = {
+	.lock_bus = kpi_i2c_lock_bus,
+	.trylock_bus = kpi_i2c_trylock_bus,
+	.unlock_bus = kpi_i2c_unlock_bus,
+};
+
+int i2c_add_adapter(struct i2c_adapter *adap)
+{
+	if (!adap->algo)
+		return -EINVAL;
+	if (!adap->lock_ops)
+		adap->lock_ops = &kpi_i2c_lock_ops;
+	adap->locked_flags = 0;
+	if (!adap->timeout)
+		adap->timeout = HZ;
+	return 0;
+}
+
+int i2c_transfer(struct i2c_adapter *adap, struct i2c_msg *msgs, int num)
+{
+	const struct i2c_lock_operations *ops = adap->lock_ops ? adap->lock_ops : &kpi_i2c_lock_ops;
+	u64 deadline = ktime_get_ns() + (u64)jiffies_to_msecs(adap->timeout ? adap->timeout : HZ) * NSEC_PER_MSEC;
+	int ret = 0, try;
+
+	if (!adap->algo || !adap->algo->master_xfer)
+		return -EOPNOTSUPP;
+	if (num <= 0)
+		return num ? -EINVAL : 0;
+	ops->lock_bus(adap, I2C_LOCK_SEGMENT);
+	for (try = 0; try <= adap->retries; try++) {	/* as Linux: retry -EAGAIN (arbitration lost) until the timeout */
+		ret = adap->algo->master_xfer(adap, msgs, num);
+		if (ret != -EAGAIN || ktime_get_ns() > deadline)
+			break;
+	}
+	ops->unlock_bus(adap, I2C_LOCK_SEGMENT);
+	return ret;
+}
+/* bit-banged adapters (i2c-algo-bit: amdgpu's pre-DC display path) are not implemented: no algo is set, so transfers
+ * on them fail with -EOPNOTSUPP */
 int i2c_bit_add_bus(struct i2c_adapter *adap) { return 0; }
 void i2c_del_adapter(struct i2c_adapter *adap) { }
 int perf_pmu_register(struct pmu *pmu, const char *name, int type) { return 0; }

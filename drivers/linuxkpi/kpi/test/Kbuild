@@ -1,1 +1,4 @@
-obj-m += kpi2test.o
+obj-m += kpi2test.o fputest.o
+# fputest exercises kernel_fpu_begin/end with SSE code, compiled like amdgpu's display core
+CFLAGS_fputest.o += $(CC_FLAGS_FPU)
+CFLAGS_REMOVE_fputest.o += $(CC_FLAGS_NO_FPU)

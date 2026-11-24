@@ -64,3 +64,83 @@
  #endif
  
  #ifndef smp_rmb
+--- a/drivers/gpu/drm/amd/display/amdgpu_dm/dc_fpu.c
++++ b/drivers/gpu/drm/amd/display/amdgpu_dm/dc_fpu.c
+@@ -39,7 +39,7 @@
+  * management.
+  */
+ 
+-static DEFINE_PER_CPU(int, fpu_recursion_depth);
++/* LinuxKPI: no per-CPU recursion depth here, see dc_fpu_begin() */
+ 
+ /**
+  * dc_assert_fp_enabled - Check if FPU protection is enabled
+@@ -51,11 +51,7 @@
+  */
+ inline void dc_assert_fp_enabled(void)
+ {
+-	int depth;
+-
+-	depth = __this_cpu_read(fpu_recursion_depth);
+-
+-	ASSERT(depth >= 1);
++	/* LinuxKPI: the nesting depth is kept per CPU by the host's kernel_fpu_begin(), not here (see dc_fpu_begin) */
+ }
+ 
+ /**
+@@ -73,17 +69,13 @@
+  */
+ void dc_fpu_begin(const char *function_name, const int line)
+ {
+-	int depth;
+-
+-	WARN_ON_ONCE(!in_task());
+-	preempt_disable();
+-	depth = __this_cpu_inc_return(fpu_recursion_depth);
+-	if (depth == 1) {
+-		BUG_ON(!kernel_fpu_available());
+-		kernel_fpu_begin();
+-	}
+-
+-	TRACE_DCN_FPU(true, function_name, line, depth);
++	/*
++	 * LinuxKPI: built !SMP, so the per-CPU recursion depth would be one counter shared by every CPU. The host's
++	 * kernel_fpu_begin() counts nesting per CPU itself (and stays on this CPU until the outermost end), so call it
++	 * every time.
++	 */
++	kernel_fpu_begin();
++	TRACE_DCN_FPU(true, function_name, line, 1);
+ }
+ 
+ /**
+@@ -98,15 +90,6 @@
+  */
+ void dc_fpu_end(const char *function_name, const int line)
+ {
+-	int depth;
+-
+-	depth = __this_cpu_dec_return(fpu_recursion_depth);
+-	if (depth == 0) {
+-		kernel_fpu_end();
+-	} else {
+-		WARN_ON_ONCE(depth < 0);
+-	}
+-
+-	TRACE_DCN_FPU(false, function_name, line, depth);
+-	preempt_enable();
++	kernel_fpu_end();	/* LinuxKPI: see dc_fpu_begin() */
++	TRACE_DCN_FPU(false, function_name, line, 0);
+ }
+--- a/arch/x86/Makefile
++++ b/arch/x86/Makefile
+@@ -95,7 +95,9 @@
+ #
+ # can be triggered. Otherwise gcc doesn't complain.
+ CC_FLAGS_FPU += -mhard-float
+-CC_FLAGS_FPU += $(call cc-option,-msse -mpreferred-stack-boundary=3,-mpreferred-stack-boundary=4)
++# LinuxKPI: the modules run under the Windows x64 ABI's 16-byte stack alignment (KCFLAGS); FP code calls into the
++# host like any other code, so it must not drop to 8
++CC_FLAGS_FPU += -mpreferred-stack-boundary=4
+ endif
+ 
+ ifeq ($(CONFIG_X86_KERNEL_IBT),y)

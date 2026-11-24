@@ -40,7 +40,7 @@ qemu-system-x86_64 -machine q35 -cpu Nehalem -smp 4 -m 4096 \
 | 5 | SMP | 5950X = 32 threads. Untested; if it hangs early, set `/ONECPU` (or `/NUMPROC=4`) in freeldr.ini. The Linux modules now use locked atomics on every CPU (they were built uniprocessor and did not). |
 | 6 | Network | Linux drivers behind an NDIS miniport: **r8169** (Realtek RTL8111/8168/8125/8126, most X570/B550 boards), **igc** (Intel I225-V/I226-V), **e1000e**, **igb**. e1000e and igb are verified in QEMU (DHCP, ping, 64 MiB each way over TCP, no corrupted byte); r8169 and igc load but have never seen their hardware. Realtek firmware patches are on the CD. |
 | 7 | Display | The 7900 XT is driven by the GOP framebuffer (no acceleration) unless the experimental GPU entry is used (section 5). |
-| 8 | amdgpu via LinuxKPI | See section 5: builds and loads, never run on an AMD GPU. No display core (DC) and no user-mode Vulkan stack yet. |
+| 8 | amdgpu via LinuxKPI | See section 5: builds and loads (with the display core, DC), never run on an AMD GPU. |
 
 ## 3. What to capture if it fails
 
@@ -94,9 +94,11 @@ tables to drivers; the log says whether VFCT is present) or the ROM BAR, DRM dev
 VRAM write-combined; the mapping follows the buffer when the driver moves it between VRAM and system memory). The
 mapping path is verified with bochs in QEMU, not with amdgpu.
 
-What is not: the display core (DC) is not built, so amdgpu cannot drive a monitor; the screen stays on the UEFI
-framebuffer (if amdgpu's init disturbs it, the screen may go dark: that is what the USB log is for). There is no
-user-mode graphics stack (libdrm, Mesa radv) yet, so no game can use the GPU even if the driver initialises.
+The display core (DC) is built in, with the DCN 3.2 display firmware, so amdgpu can drive the monitor itself. Expect
+the screen to go dark once amdgpu has initialised, even when it worked: DC takes the display over from the firmware,
+and nothing sets a mode on it afterwards (there is no Linux console, and the ReactOS desktop still draws into the old
+firmware framebuffer). The USB log says whether amdgpu got that far. `tools/vulkan/drmkms.c` is the test that sets a
+mode through DRM and draws into it; it is verified with bochs in QEMU only.
 
 The deferred loading path is verified in QEMU with the bochs DRM driver standing in for amdgpu (QEMU cannot emulate a
 Radeon). amdgpu itself has never run on hardware; expect it to stop somewhere during IP block init, and send the log.

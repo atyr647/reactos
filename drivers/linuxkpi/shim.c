@@ -6,6 +6,7 @@
 
 #include "linuxkpi.h"
 #include <pseh/pseh2.h>
+#include <xmmintrin.h>
 
 typedef unsigned long long u64;
 typedef unsigned int u32;
@@ -582,6 +583,61 @@ void LX_ABI nt_lower_irql(unsigned char Old)
     if (KeGetCurrentIrql() > (KIRQL)Old) KeLowerIrql((KIRQL)Old);
 }
 
+/*
+ * Linux kernel_fpu_begin()/kernel_fpu_end() for SSE code in Linux modules (amdgpu's display core computes bandwidth
+ * and clocks in double precision). On x64 NT keeps a kernel thread's SSE registers across interrupts (volatile ones
+ * in the trap frame) and thread switches (non-volatile ones in the switch frame), as Windows does, so what remains
+ * is what Linux also does: no thread switch inside the section (Linux disables preemption; here DISPATCH_LEVEL, so
+ * the thread also stays on this CPU) and the default MXCSR (a user thread's MXCSR may unmask exceptions or set
+ * flush-to-zero). Sections nest per CPU. x87 is not supported (the modules' FP code is SSE only; checked at build).
+ */
+typedef struct _LKPI_FPU_CPU
+{
+    ULONG Depth;
+    ULONG Mxcsr;
+    KIRQL Irql;
+} LKPI_FPU_CPU;
+
+static LKPI_FPU_CPU LkpiFpuCpu[MAXIMUM_PROCESSORS];
+
+void LX_ABI nt_fpu_begin(void)
+{
+    KIRQL Old = KeGetCurrentIrql();
+    LKPI_FPU_CPU *C;
+
+    if (Old < DISPATCH_LEVEL)
+        KeRaiseIrql(DISPATCH_LEVEL, &Old);
+    C = &LkpiFpuCpu[KeGetCurrentProcessorNumber() % MAXIMUM_PROCESSORS];
+    if (C->Depth++ == 0)
+    {
+        C->Irql = Old;
+        C->Mxcsr = _mm_getcsr();
+        _mm_setcsr(0x1F80);         /* all exceptions masked, round to nearest, no FTZ/DAZ */
+    }
+    else if (Old < DISPATCH_LEVEL)
+    {
+        /* cannot happen: a nested begin finds the IRQL raised by the outer one */
+        KeLowerIrql(Old);
+    }
+}
+
+void LX_ABI nt_fpu_end(void)
+{
+    LKPI_FPU_CPU *C = &LkpiFpuCpu[KeGetCurrentProcessorNumber() % MAXIMUM_PROCESSORS];
+
+    if (!C->Depth)
+    {
+        DbgPrint("LKPI: kernel_fpu_end without kernel_fpu_begin\n");
+        return;
+    }
+    if (--C->Depth == 0)
+    {
+        _mm_setcsr(C->Mxcsr);
+        if (C->Irql < DISPATCH_LEVEL)
+            KeLowerIrql(C->Irql);
+    }
+}
+
 void LX_ABI nt_sleep_ms(unsigned int Ms)
 {
     LARGE_INTEGER Interval;
@@ -823,6 +879,8 @@ const LKPI_EXPORT LkpiExports[] =
     { "nt_read_firmware", (PVOID)nt_read_firmware },
     { "nt_current_tid", (PVOID)nt_current_tid },
     { "nt_raise_dispatch", (PVOID)nt_raise_dispatch },
+    { "nt_fpu_begin", (PVOID)nt_fpu_begin },
+    { "nt_fpu_end", (PVOID)nt_fpu_end },
     { "nt_lower_irql", (PVOID)nt_lower_irql },
     { "nt_sleep_ms", (PVOID)nt_sleep_ms },
     { "nt_stall_us", (PVOID)nt_stall_us },

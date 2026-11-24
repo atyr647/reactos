@@ -112,7 +112,7 @@ drm_display_helper.ko; gpu-sched.ko; drm_exec.ko; drm_buddy.ko; drm_suballoc_hel
 Every external symbol of these 14 modules is provided (measured with `nm`; see `amdgpu_need.txt` for the history).
 What is real: memory/page layer, PCI config + BAR sizing + probe, interrupt connect (legacy line via the HAL), firmware
 file loading (`\\SystemRoot\\system32\\firmware\\<name>`, name with `/` -> `\\`), workqueues, timers, hrtimers, kthreads.
-What is a stub: sysfs/debugfs, runtime PM, ACPI, hwmon, backlight, i2c, perf, IOMMU, MSI/MSI-X (vector 0 = INTx only),
+What is a stub: sysfs/debugfs, runtime PM, ACPI, hwmon, backlight, i2c-algo-bit, perf, IOMMU, MSI/MSI-X (vector 0 = INTx only),
 dma-buf import/export, shmem, cache attributes (WC/UC) for system pages.
 
 ### Trying it on real hardware (untested, expect failures)
@@ -143,6 +143,35 @@ because the IRP runs in the caller's context (no fault recovery yet: a bad user 
 
 Still missing for user-mode graphics: a `libdrm` shim (`drmOpen`, `drmIoctl`, `drmMap`, ...) and a Mesa winsys for it.
 (Bad user pointers in ioctl arguments are now caught: `nt_copy_user` returns `-EFAULT`.)
+
+## amdgpu with the display core (DC)
+`CONFIG_DRM_AMD_DC=y` (with `DRM_AMD_DC_FP`): amdgpu can now drive monitors itself (DCN 3.2 on the RX 7900 XT),
+instead of leaving the screen on the firmware framebuffer. amdgpu.ko grows from 8 to 16 MB (790 more objects); all its
+imports resolve against our modules after four additions (`debugfs_create_file_unsafe`, `dmi_first_match`,
+`ktime_get_raw`, `system_highpri_wq`). In QEMU it loads and binds no device, as before; it has not run on an AMD GPU.
+
+What DC needed from the host:
+* **Floating point in kernel mode.** DC computes bandwidth and clocks in double precision (SSE, no x87: checked in
+  the objects) between `kernel_fpu_begin()`/`kernel_fpu_end()`. These were empty; the host now raises to
+  DISPATCH_LEVEL (no thread switch, as Linux disables preemption), loads the default MXCSR, counts nesting per CPU
+  and restores everything at the end (`nt_fpu_begin/end` in `shim.c`). DC's own per-CPU nesting counter would be one
+  counter for all CPUs in our uniprocessor build, so the tree patch makes `dc_fpu_begin()` defer to the host.
+* **16-byte stack alignment for FP code.** The kernel builds FP files with `-mpreferred-stack-boundary=3`; called
+  into NT code with an 8-aligned stack, any aligned SSE store there faults. The tree patch keeps 16 for FP code.
+* **i2c transfers.** DC reads monitor EDIDs over i2c (HDMI DDC, and DisplayPort AUX through DRM's i2c adapter);
+  `i2c_transfer()` returned -ENODEV. It now runs the adapter's `master_xfer` with bus locking and -EAGAIN retries
+  (`kpi2_amd.c`; tests in `kpi/test/kpi2test.c`). Bit-banged adapters (i2c-algo-bit) are still not implemented.
+* **Firmware**: `amdgpu/dcn_3_2_0_dmcub.bin` (display microcontroller) is fetched and checksummed with the rest.
+
+Kernel bug found on the way (upstream ReactOS): **MXCSR was not kept per thread.** The context switch saved no
+floating-point state for system threads, so a kernel thread could resume with another thread's rounding mode,
+flush-to-zero or unmasked exceptions (the x64 ABI makes MXCSR's control bits non-volatile). `KiSwapContext` now saves
+and restores it in the exception frame it already builds, and new threads start with the kernel default.
+
+`kpi/test/fputest.c` checks all of this: three threads run 1200 FP sections of 2 ms (long enough for clock and
+device interrupts to land inside), each holding patterns in all 16 XMM registers, computing a double-precision result
+and setting an unusual MXCSR outside the section. QEMU, 4 vCPUs: 0 register, 0 result and 0 MXCSR mismatches, three
+boots in a row. Before the context-switch fix the same test found 4 MXCSR mismatches.
 
 ## Milestone: DRM buffers mapped into user mode (`IOCTL_LKPI_DRM_MMAP`)
 `DeviceIoControl(IOCTL_LKPI_DRM_MMAP, {Offset, Size})` maps the buffer behind a fake mmap offset (from

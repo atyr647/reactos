@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
-/* Exercises kpi.ko/kpi2.ko: workqueues, delayed work, timers, dma-fence, dma-resv, krealloc, devres, ww_mutex. */
+/* Exercises kpi.ko/kpi2.ko: workqueues, delayed work, timers, dma-fence, dma-resv, krealloc, devres, ww_mutex, i2c. */
 #include <linux/module.h>
 #include <linux/workqueue.h>
 #include <linux/timer.h>
@@ -15,6 +15,7 @@
 #include <linux/vmalloc.h>
 #include <linux/dma-mapping.h>
 #include <linux/io.h>
+#include <linux/i2c.h>
 
 static int failures;
 #define CHECK(c, what) do { if (c) pr_info("kpi2test: ok   %s\n", what); else { failures++; pr_err("kpi2test: FAIL %s\n", what); } } while (0)
@@ -33,6 +34,40 @@ static const char *fence_name(struct dma_fence *f) { return "kpi2test"; }
 static const struct dma_fence_ops fence_ops = { .get_driver_name = fence_name, .get_timeline_name = fence_name };
 
 static DEFINE_WW_CLASS(test_class);
+
+/* an i2c adapter as amdgpu's display core registers one: arbitration is lost twice (-EAGAIN), then the read works */
+static int i2c_calls;
+static int test_xfer(struct i2c_adapter *adap, struct i2c_msg *msgs, int num)
+{
+	if (++i2c_calls <= 2)
+		return -EAGAIN;
+	if (num == 2 && (msgs[1].flags & I2C_M_RD))
+		memset(msgs[1].buf, 0xA5, msgs[1].len);
+	return num;
+}
+static u32 test_func(struct i2c_adapter *adap) { return I2C_FUNC_I2C; }
+static const struct i2c_algorithm test_algo = { .master_xfer = test_xfer, .functionality = test_func };
+
+static void i2c_tests(void)
+{
+	static struct i2c_adapter adap = { .algo = &test_algo, .retries = 3, .name = "kpi2test" };
+	static struct i2c_adapter noalgo = { .name = "noalgo" };
+	u8 offset = 0, edid[8] = { 0 };
+	struct i2c_msg msgs[2] = {
+		{ .addr = 0x50, .flags = 0, .len = 1, .buf = &offset },
+		{ .addr = 0x50, .flags = I2C_M_RD, .len = sizeof(edid), .buf = edid },
+	};
+
+	CHECK(i2c_add_adapter(&noalgo) == -EINVAL, "i2c_add_adapter refuses an adapter without algo");
+	CHECK(i2c_add_adapter(&adap) == 0 && adap.lock_ops, "i2c_add_adapter sets bus lock ops");
+	CHECK(i2c_transfer(&adap, msgs, 2) == 2 && i2c_calls == 3, "i2c_transfer retries -EAGAIN");
+	CHECK(edid[0] == 0xA5 && edid[7] == 0xA5, "i2c_transfer read data");
+	CHECK(i2c_transfer(&noalgo, msgs, 2) == -EOPNOTSUPP, "i2c_transfer without master_xfer");
+	adap.retries = 0;
+	i2c_calls = 0;
+	CHECK(i2c_transfer(&adap, msgs, 2) == -EAGAIN && i2c_calls == 1, "i2c_transfer honours retries = 0");
+	i2c_del_adapter(&adap);
+}
 
 static int __init kpi2test_init(void)
 {
@@ -129,6 +164,7 @@ static int __init kpi2test_init(void)
 		}
 	}
 
+	i2c_tests();
 	pr_info("kpi2test: %s (%d failures)\n", failures ? "FAIL" : "PASS", failures);
 	return 0;
 }

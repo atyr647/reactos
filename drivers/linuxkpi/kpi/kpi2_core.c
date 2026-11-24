@@ -213,10 +213,11 @@ struct workqueue_struct {
 
 extern void nt_log_addr(const char *tag, void *addr);
 int kpi_wq_trace = 0;
-static struct workqueue_struct kpi_system_wq, kpi_unbound_wq, kpi_long_wq;
+static struct workqueue_struct kpi_system_wq, kpi_unbound_wq, kpi_long_wq, kpi_highpri_wq;
 struct workqueue_struct *system_wq = &kpi_system_wq;
 struct workqueue_struct *system_unbound_wq = &kpi_unbound_wq;
 struct workqueue_struct *system_long_wq = &kpi_long_wq;
+struct workqueue_struct *system_highpri_wq = &kpi_highpri_wq;
 
 static void kpi_wq_thread(void *arg)
 {
@@ -264,6 +265,7 @@ static void kpi_system_wqs_init(void)
 	kpi_wq_init(&kpi_system_wq, "events");
 	kpi_wq_init(&kpi_unbound_wq, "events_unbound");
 	kpi_wq_init(&kpi_long_wq, "events_long");
+	kpi_wq_init(&kpi_highpri_wq, "events_highpri");
 }
 
 struct workqueue_struct *alloc_workqueue(const char *fmt, unsigned int flags, int max_active, ...)

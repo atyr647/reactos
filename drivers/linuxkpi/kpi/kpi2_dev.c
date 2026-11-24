@@ -61,8 +61,11 @@ kmem_buckets kmalloc_caches[NR_KMALLOC_TYPES];
 void dump_stack(void) { nt_dbgprint("dump_stack()\n"); }
 bool capable(int cap) { return true; }
 int __request_module(bool wait, const char *fmt, ...) { return 0; }
-void kernel_fpu_begin_mask(unsigned int mask) { }
-void kernel_fpu_end(void) { }
+/* SSE in Linux modules (amdgpu's display core): the host stops thread switches and sets the default MXCSR (shim.c) */
+extern void nt_fpu_begin(void);
+extern void nt_fpu_end(void);
+void kernel_fpu_begin_mask(unsigned int mask) { nt_fpu_begin(); }
+void kernel_fpu_end(void) { nt_fpu_end(); }
 void *memdup_user(const void __user *src, size_t len)
 {
 	void *p = kmalloc(len, GFP_KERNEL);
@@ -442,6 +445,7 @@ void __release_region(struct resource *parent, resource_size_t start, resource_s
 static struct dentry kpi_dummy_dentry;
 struct dentry *debugfs_create_dir(const char *name, struct dentry *parent) { return &kpi_dummy_dentry; }
 struct dentry *debugfs_create_file(const char *name, umode_t mode, struct dentry *parent, void *data, const struct file_operations *fops) { return &kpi_dummy_dentry; }
+struct dentry *debugfs_create_file_unsafe(const char *name, umode_t mode, struct dentry *parent, void *data, const struct file_operations *fops) { return &kpi_dummy_dentry; }
 void debugfs_create_atomic_t(const char *name, umode_t mode, struct dentry *parent, atomic_t *value) { }
 struct dentry *debugfs_create_symlink(const char *name, struct dentry *parent, const char *target) { return &kpi_dummy_dentry; }
 struct dentry *debugfs_lookup(const char *name, struct dentry *parent) { return NULL; }
@@ -519,7 +523,7 @@ int aperture_remove_conflicting_devices(resource_size_t base, resource_size_t si
 int aperture_remove_conflicting_pci_devices(struct pci_dev *pdev, const char *name) { return 0; }
 int devm_aperture_acquire_for_platform_device(struct platform_device *pdev, resource_size_t base, resource_size_t size) { return 0; }
 struct i2c_client *i2c_new_client_device(struct i2c_adapter *adap, struct i2c_board_info const *info) { return ERR_PTR(-ENODEV); }
-int i2c_transfer(struct i2c_adapter *adap, struct i2c_msg *msgs, int num) { return -ENODEV; }
+/* i2c_transfer(): kpi2_amd.c (i2c core subset) */
 void i2c_unregister_device(struct i2c_client *client) { }
 bool is_acpi_device_node(const struct fwnode_handle *fwnode) { return false; }
 int register_acpi_bus_type(struct acpi_bus_type *type) { return 0; }

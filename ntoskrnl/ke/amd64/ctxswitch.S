@@ -87,6 +87,10 @@ PUBLIC KiThreadStartup
     xor r14, r14
     xor r15, r15
 
+    /* Start with the kernel's default MXCSR, not the previous thread's (user threads get their own from the trap
+     * frame when they enter user mode) */
+    ldmxcsr gs:[PcMxCsr]
+
     /* It's now safe to go to APC */
     mov rax, APC_LEVEL
     mov cr8, rax
@@ -240,9 +244,17 @@ PUBLIC KiSwapContext
     /* Generate a KEXCEPTION_FRAME on the stack */
     GENERATE_EXCEPTION_FRAME
 
+    /* MXCSR's control bits are non-volatile in the x64 ABI: a thread keeps its own across the switch. System
+     * threads have no extended state saved by KiSwapContextResume, so without this they would run with whatever
+     * MXCSR the previous thread left (rounding mode, flush-to-zero, unmasked exceptions). */
+    stmxcsr [rsp + ExMxCsr]
+
     /* Do the swap with the registers correctly setup */
     mov r8, gs:[PcCurrentThread] /* Pointer to the new thread */
     call KiSwapContextInternal
+
+    /* We are the resumed thread: take our MXCSR back */
+    ldmxcsr [rsp + ExMxCsr]
 
     /* Restore the registers from the KEXCEPTION_FRAME */
     RESTORE_EXCEPTION_STATE
