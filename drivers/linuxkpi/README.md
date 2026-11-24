@@ -173,6 +173,16 @@ device interrupts to land inside), each holding patterns in all 16 XMM registers
 and setting an unusual MXCSR outside the section. QEMU, 4 vCPUs: 0 register, 0 result and 0 MXCSR mismatches, three
 boots in a row. Before the context-switch fix the same test found 4 MXCSR mismatches.
 
+## libdrm and RADV on top of the DRM nodes
+`tools/vulkan/libdrm-ros` is libdrm for ReactOS, and `tools/vulkan/build-radv-x64.sh` builds Mesa's RADV with its real
+amdgpu winsys on it (see `tools/vulkan/README.md`). What the host needed for that:
+* DRM nodes are created as `FILE_DEVICE_SCREEN`, which `GetFileType()` reports as a character device: the C runtime's
+  `open()` refuses `FILE_TYPE_UNKNOWN`, and Mesa opens render nodes with `open()`.
+* `IOCTL_LKPI_DRM_INFO` (`lkpi_drm.h`): which device a handle is open on (its primary and render minors, the Linux
+  driver's name, PCI location and ids). libdrm's device enumeration reads sysfs on Linux; here it opens each node and
+  asks.
+* PCI buses now have `sysdata` (segment 0): x86 `pci_domain_nr()` reads it and crashed on NULL.
+
 ## Milestone: DRM buffers mapped into user mode (`IOCTL_LKPI_DRM_MMAP`)
 `DeviceIoControl(IOCTL_LKPI_DRM_MMAP, {Offset, Size})` maps the buffer behind a fake mmap offset (from
 `DRM_IOCTL_MODE_MAP_DUMB`, `DRM_IOCTL_AMDGPU_GEM_MMAP`, ...) into the calling process; `IOCTL_LKPI_DRM_MUNMAP`
@@ -325,3 +335,10 @@ upload). r8169 (with libphy, mdio_devres and the Realtek PHY driver) and igc loa
   allocation). Constructors now run on every cache allocation.
 * The heap now detects double frees and free-list corruption and names the Linux callers from the stack.
 * PCI devices had no parent device (`pm_runtime_suspended(dev->parent)` in e1000e dereferenced NULL).
+* **Only PCI buses 0-3 were searched for devices**, so on a real board most devices would never have been found (GPUs,
+  NVMe and NICs often sit on buses 5-15 behind bridges). Driver binding also sized the BARs of every device in the
+  system on each driver registration, briefly turning off decoding on devices that Windows drivers were using, and
+  leaked a `pci_dev` per device each time. Now the whole topology is walked (all 256 buses, multifunction devices),
+  only config-space ids are read until a driver matches, and a device gets one `pci_dev` for good. Verified in QEMU with
+  devices behind PCIe root ports: NVMe on bus 3, xHCI on bus 4 and the e1000e on bus 5 all bind; nettest and winchk
+  pass over that NIC.

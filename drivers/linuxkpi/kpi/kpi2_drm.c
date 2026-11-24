@@ -13,6 +13,7 @@
 #include <drm/drm_drv.h>
 #include <drm/drm_device.h>
 #include <linux/mm.h>
+#include <linux/pci.h>
 
 static const struct file_operations kpi_dummy_fops = { .fop_flags = FOP_UNSIGNED_OFFSET };   /* drm_open_helper() checks this */
 
@@ -41,7 +42,8 @@ void *kpi_drm_open(int minor)
 	if (!r && !h->file.private_data)
 		r = -ENODEV;		/* no drm_file: never hand out a handle that would be dereferenced as one */
 	if (r) {
-		pr_err("kpi2_drm: drm_open(minor %d) failed: %d\n", minor, r);
+		if (r != -ENODEV)	/* no device on this minor: expected, libdrm opens every node to enumerate */
+			pr_err("kpi2_drm: drm_open(minor %d) failed: %d\n", minor, r);
 		kfree(h);
 		return NULL;
 	}
@@ -66,6 +68,47 @@ void kpi_drm_close(void *handle)
 	drm_release(&h->inode, &h->file);
 	kfree(h);
 }
+
+/* IOCTL_LKPI_DRM_INFO: must match LKPI_DRM_INFO in lkpi_drm.h */
+struct kpi_drm_info {
+	int minor, primary_minor, render_minor, is_pci;
+	u16 domain, vendor, device, subvendor, subdevice, reserved;
+	u8 bus, dev, func, revision;
+	char driver[32];
+};
+
+int kpi_drm_info(void *handle, struct kpi_drm_info *info)
+{
+	struct kpi_drm_handle *h = handle;
+	struct drm_file *fp = h->file.private_data;
+	struct drm_device *dev;
+
+	BUILD_BUG_ON(sizeof(struct kpi_drm_info) != 64);
+	if (!fp || !fp->minor || !fp->minor->dev)
+		return -ENODEV;
+	dev = fp->minor->dev;
+	memset(info, 0, sizeof(*info));
+	info->minor = fp->minor->index;
+	info->primary_minor = dev->primary ? dev->primary->index : -1;
+	info->render_minor = dev->render ? dev->render->index : -1;
+	strscpy(info->driver, dev->driver->name, sizeof(info->driver));
+	if (dev->dev && dev_is_pci(dev->dev)) {
+		struct pci_dev *pdev = to_pci_dev(dev->dev);
+
+		info->is_pci = 1;
+		info->domain = pci_domain_nr(pdev->bus);
+		info->bus = pdev->bus->number;
+		info->dev = PCI_SLOT(pdev->devfn);
+		info->func = PCI_FUNC(pdev->devfn);
+		info->vendor = pdev->vendor;
+		info->device = pdev->device;
+		info->subvendor = pdev->subsystem_vendor;
+		info->subdevice = pdev->subsystem_device;
+		info->revision = pdev->revision;
+	}
+	return 0;
+}
+EXPORT_SYMBOL(kpi_drm_info);
 
 /*
  * mmap of a DRM buffer into a user process.

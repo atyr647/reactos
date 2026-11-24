@@ -100,5 +100,20 @@ and nothing sets a mode on it afterwards (there is no Linux console, and the Rea
 firmware framebuffer). The USB log says whether amdgpu got that far. `tools/vulkan/drmkms.c` is the test that sets a
 mode through DRM and draws into it; it is verified with bochs in QEMU only.
 
+**Vulkan on the GPU (RADV).** `tools/vulkan/build-radv-x64.sh` builds Mesa's RADV for ReactOS on top of this driver.
+To try it, put `vulkan-1.dll` (from `build-vulkan-x64.sh`), `vulkan_radeon.dll`, `radeon_icd.x86_64.json`,
+`amdgpu.ids`, `radvtest.exe` and `libdrmtest.exe` in one folder on a USB stick, boot the experimental GPU entry, and run
+`radvtest.exe` from a command prompt (the screen may be dark once amdgpu has loaded: type blind, or look at the
+`LKPILOG.TXT` stick afterwards; `radvtest` prints to the debugger and the console). What it should say on a working
+RX 7900 XT:
+
+    RADVTEST:   device 0: 'AMD Radeon RX 7900 XT (RADV NAVI31)' 1002:744c ...
+    RADVTEST: ok   vkCreateDevice ...
+    RADVTEST: ok   vkCreateComputePipelines: the shader compiled for the GPU (ACO)
+    RADVTEST: ok   the GPU ran the shader: 0 of 16384 values wrong ...
+    RADVTEST: PASS
+
+Verified in QEMU only up to "RADV loads, enumerates the DRM devices through libdrm and finds no AMD GPU".
+
 The deferred loading path is verified in QEMU with the bochs DRM driver standing in for amdgpu (QEMU cannot emulate a
 Radeon). amdgpu itself has never run on hardware; expect it to stop somewhere during IP block init, and send the log.

@@ -62,5 +62,43 @@ succeed on lavapipe and the window shows the animated clear colour. vkd3d-proton
   filled in. Next: reproduce with a small textured D3D11/Vulkan test on `-cpu Nehalem` to tell a lavapipe/llvmpipe
   issue from a Godot-specific one, then log sampler function creation in llvmpipe.
 
+## RADV on amdgpu (LinuxKPI): `build-radv-x64.sh`
+The real driver for AMD GPUs: Mesa's RADV with its amdgpu winsys, talking to the Linux amdgpu driver that the
+LinuxKPI host runs in the kernel. Upstream Mesa builds RADV on Windows with a null winsys only (no kernel driver);
+here the kernel driver exists, so:
+
+* **libdrm-ros** (`libdrm-ros/`): libdrm for ReactOS. Upstream libdrm's KMS API (`xf86drmMode.c`) and `libdrm_amdgpu`
+  compile unchanged; `src/ros_drm.c` replaces the Linux-only `xf86drm.c` (devices found by opening
+  `\\.\LKPIDRM<n>` and asking the kernel which device it is, ioctls as one `DeviceIoControl` each), `src/ros_posix.c`
+  gives `mmap`/`munmap` of DRM buffers, `fcntl`, `sysconf`, `getline`, `ioctl`. DRM nodes are character devices, so
+  fds are ordinary C runtime fds (`open`, `close`, `dup` work).
+  Two Windows-x64 details that would otherwise break silently: Linux errno values above 34 are translated (EOPNOTSUPP
+  is 95 on Linux, 130 here; ETIME, ECANCELED, ... too), and pointers are no longer cast through 32-bit `unsigned long`
+  (`xf86drmMode.c`'s `VOID2U64`). `libdrm-ros/abicheck.sh` compares every DRM and amdgpu ioctl number (which encodes
+  the argument size) between Linux x86-64 and Windows x64: only legacy ioctls differ, plus `WAIT_VBLANK`, which
+  `drmWaitVBlank()` translates.
+* **`patch-mesa-radv.py`**: a `windows-libdrm` meson option; the amdgpu winsys and `ac_linux_drm.c` are built on
+  Windows; the "no DRM on Windows" guards in RADV and `ac` become "unless libdrm" (debug tools that run `dmesg`/`umr`,
+  RMV tracing and calibrated timestamps stay off); DRM node device numbers come from libdrm-ros instead of `stat()`;
+  `VK_EXT_map_memory_placed` is not offered (NT cannot map a device buffer over an existing reservation); an addrlib
+  fix for mingw (`_tzcnt_u32` without `-mbmi`). Idempotent; every patch checks its anchor.
+* Presentation uses `wsi_common_win32`'s CPU path: the GPU copies the frame into a host-visible buffer, which is copied
+  into a GDI DIB section (the DXGI path needs a D3D12 queue, which only Dozen has).
+
+Result: `vulkan_radeon.dll` (22 MB, no LLVM, imports only kernel32/user32/gdi32/msvcrt and one api-set; checked with
+`rosimp.py`). In QEMU (no AMD GPU; two bochs displays):
+
+    LIBDRMTEST: ALL PASS (0 failures)        libdrm API: devices, version, caps, KMS resources and modes, dumb
+                                             buffer + mmap + mode set, close-before-munmap, errno translation,
+                                             libdrm_amdgpu refusing a non-AMD device
+    RADVTEST:   | radv: info: Created an instance.
+    RADVTEST:   | libdrm-ros: device 0: driver bochs-drm, primary minor 0, render minor -1, PCI 1234:1111
+    RADVTEST:   | libdrm-ros: device 1: driver bochs-drm, primary minor 1, render minor -1, PCI 1234:1111
+    RADVTEST: no AMD GPU (expected without one, e.g. in QEMU)
+
+`radvtest` on an AMD GPU creates a device, compiles a compute shader with ACO, runs it and checks all 16384 values it
+writes. That part has not run yet: QEMU has no AMD GPU, and this Mesa has no simulated device any more (its
+replacement is a Linux `LD_PRELOAD` shim). See `drivers/linuxkpi/REAL-HARDWARE.md`, section 5.
+
 ## Next gates
-vkcube (win32 WSI), DXVK D3D11 sample, vkd3d-proton D3D12 sample, then radv on amdgpu (LinuxKPI).
+vkcube (win32 WSI), DXVK D3D11 sample, vkd3d-proton D3D12 sample, then radv on a real RX 7900 XT (`radvtest`).

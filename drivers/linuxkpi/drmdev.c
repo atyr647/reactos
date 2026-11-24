@@ -17,6 +17,9 @@ typedef void * (LX_ABI *PFN_MMAP)(void *H, unsigned long long Offset, unsigned l
 typedef void (LX_ABI *PFN_MUNMAP)(void *Cookie);
 typedef void (LX_ABI *PFN_REMAP)(void *Host, ULONG64 *Pfn, unsigned long Npages, unsigned int Cache);
 typedef void (LX_ABI *PFN_SET_REMAP)(PFN_REMAP Fn);
+typedef int (LX_ABI *PFN_INFO)(void *H, LKPI_DRM_INFO *Info);
+
+C_ASSERT(sizeof(LKPI_DRM_INFO) == 64);      /* struct kpi_drm_info in kpi/kpi2_drm.c */
 
 /* ReactOS kernel extension (ntoskrnl/mm/ARM3/mdlsup.c): repoint a user mapping made from an MDL at other frames */
 NTKERNELAPI NTSTATUS NTAPI MmReplaceLockedPagesInUserSpace(PVOID BaseAddress, PMDL NewMdl, MEMORY_CACHING_TYPE CacheType);
@@ -26,6 +29,7 @@ static PFN_IOCTL DrmIoctl;
 static PFN_CLOSE DrmClose;
 static PFN_MMAP DrmMmap;
 static PFN_MUNMAP DrmMunmap;
+static PFN_INFO DrmInfo;
 
 typedef struct _DRM_DEVEXT { int Minor; } DRM_DEVEXT, *PDRM_DEVEXT;
 
@@ -75,6 +79,7 @@ DrmResolve(VOID)
     if (!DrmClose) DrmClose = (PFN_CLOSE)LkpiLookupModuleSymbol("kpi_drm_close");
     if (!DrmMmap) DrmMmap = (PFN_MMAP)LkpiLookupModuleSymbol("kpi_drm_mmap");
     if (!DrmMunmap) DrmMunmap = (PFN_MUNMAP)LkpiLookupModuleSymbol("kpi_drm_munmap");
+    if (!DrmInfo) DrmInfo = (PFN_INFO)LkpiLookupModuleSymbol("kpi_drm_info");
     {
         static BOOLEAN RemapSet;
         PFN_SET_REMAP SetRemap = (PFN_SET_REMAP)LkpiLookupModuleSymbol("kpi_drm_set_remap");
@@ -387,8 +392,26 @@ DrmControl(PDEVICE_OBJECT Dev, PIRP Irp)
     PDRM_FILE F = Sp->FileObject->FsContext;
     ULONG Code = Sp->Parameters.DeviceIoControl.IoControlCode;
 
-    if ((Code == IOCTL_LKPI_DRM_MMAP || Code == IOCTL_LKPI_DRM_MUNMAP) && (!F || !F->Handle))
+    if ((Code == IOCTL_LKPI_DRM_MMAP || Code == IOCTL_LKPI_DRM_MUNMAP || Code == IOCTL_LKPI_DRM_INFO) &&
+        (!F || !F->Handle))
         Status = STATUS_INVALID_HANDLE;
+    else if (Code == IOCTL_LKPI_DRM_INFO)
+    {
+        LKPI_DRM_INFO *Req = Irp->AssociatedIrp.SystemBuffer;
+
+        if (Sp->Parameters.DeviceIoControl.OutputBufferLength < sizeof(*Req))
+            Status = STATUS_BUFFER_TOO_SMALL;
+        else if (!DrmInfo)
+            Status = STATUS_NOT_SUPPORTED;
+        else if (DrmInfo(F->Handle, Req) != 0)
+            Status = STATUS_NO_SUCH_DEVICE;
+        else
+        {
+            Req->Driver[sizeof(Req->Driver) - 1] = 0;
+            Status = STATUS_SUCCESS;
+            Info = sizeof(*Req);
+        }
+    }
     else if (Code == IOCTL_LKPI_DRM_MMAP)
     {
         LKPI_DRM_MMAP *Req = Irp->AssociatedIrp.SystemBuffer;
@@ -515,7 +538,9 @@ LkpiCreateDrmNodes(PDRIVER_OBJECT DriverObject)
         RtlStringCbPrintfW(LinkBuf, sizeof(LinkBuf), L"\\DosDevices\\LKPIDRM%d", Minors[i]);
         RtlInitUnicodeString(&Name, NameBuf);
         RtlInitUnicodeString(&Link, LinkBuf);
-        Status = IoCreateDevice(DriverObject, sizeof(DRM_DEVEXT), &Name, FILE_DEVICE_UNKNOWN, 0, FALSE, &Dev);
+        /* a character device, as on Linux: GetFileType() says FILE_TYPE_CHAR for FILE_DEVICE_SCREEN, so the C runtime's
+         * open()/_open_osfhandle() accept the node (they refuse FILE_TYPE_UNKNOWN) and libdrm/Mesa use plain fds */
+        Status = IoCreateDevice(DriverObject, sizeof(DRM_DEVEXT), &Name, FILE_DEVICE_SCREEN, 0, FALSE, &Dev);
         if (!NT_SUCCESS(Status)) { DbgPrint("LKPI: IoCreateDevice(%wZ) failed %08lx\n", &Name, Status); continue; }
         ((PDRM_DEVEXT)Dev->DeviceExtension)->Minor = Minors[i];
         Dev->Flags |= DO_BUFFERED_IO;

@@ -34,3 +34,21 @@ typedef struct _LKPI_DRM_MMAP
     unsigned long long Size;
     unsigned long long Address;
 } LKPI_DRM_MMAP;
+
+/*
+ * Which device a DRM handle is open on (for libdrm's device enumeration, which reads sysfs on Linux). Minors follow
+ * Linux: primary nodes 0-63 (\\.\LKPIDRM<n>), render nodes 128-191; -1 = the device has no node of that kind.
+ * Layout shared with kpi/kpi2_drm.c (struct kpi_drm_info): 64 bytes, no implicit padding.
+ */
+#define IOCTL_LKPI_DRM_INFO   CTL_CODE(FILE_DEVICE_UNKNOWN, 0x803, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+typedef struct _LKPI_DRM_INFO
+{
+    int Minor;                  /* the node this handle is open on */
+    int PrimaryMinor;
+    int RenderMinor;
+    int IsPci;                  /* the fields below are valid */
+    unsigned short Domain, Vendor, Device, SubVendor, SubDevice, Reserved;
+    unsigned char Bus, Dev, Func, Revision;
+    char Driver[32];            /* Linux driver name, e.g. "amdgpu", "bochs-drm" */
+} LKPI_DRM_INFO;

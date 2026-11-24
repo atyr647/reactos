@@ -14,11 +14,14 @@ extern int nt_pci_cfg_read(unsigned int bus, unsigned int devfn, unsigned int of
 extern int nt_pci_cfg_write(unsigned int bus, unsigned int devfn, unsigned int off, unsigned int len, unsigned int val);
 extern void nt_dbgprint(const char *s);
 
-#define KPI_MAX_BUS 4
+#define KPI_MAX_BUS 256         /* every bus number; the HAL answers config reads up to the highest one present */
 
 static struct pci_bus *kpi_buses[KPI_MAX_BUS];
+static DEFINE_MUTEX(kpi_pci_lock);  /* the bus/device lists, driver binding */
 /* the host bridge: every device has a parent in Linux (drivers look at dev.parent, e.g. pm_runtime_suspended()) */
 static struct device kpi_pci_root;
+/* PCI segment 0, the only one enumerated: x86 pci_domain_nr() and pcibus_to_node() read bus->sysdata */
+static struct pci_sysdata kpi_pci_sysdata = { .domain = 0, .node = NUMA_NO_NODE };
 
 static struct pci_bus *kpi_bus(unsigned int nr)
 {
@@ -27,6 +30,7 @@ static struct pci_bus *kpi_bus(unsigned int nr)
 		if (kpi_buses[nr]) {
 			kpi_buses[nr]->number = nr;
 			kpi_buses[nr]->bridge = &kpi_pci_root;
+			kpi_buses[nr]->sysdata = &kpi_pci_sysdata;
 			INIT_LIST_HEAD(&kpi_buses[nr]->devices);
 		}
 	}
@@ -70,6 +74,10 @@ static struct pci_dev *kpi_pci_make_dev(unsigned int bus, unsigned int devfn)
 	if (!dev)
 		return NULL;
 	dev->bus = kpi_bus(bus);
+	if (!dev->bus) {
+		kfree(dev);
+		return NULL;
+	}
 	dev->devfn = devfn;
 	dev->vendor = id & 0xffff;
 	dev->device = id >> 16;
@@ -131,50 +139,89 @@ static struct pci_dev *kpi_pci_make_dev(unsigned int bus, unsigned int devfn)
 			i++;
 	}
 	nt_pci_cfg_write(bus, devfn, 4, 2, cmd);
+	list_add_tail(&dev->bus_list, &dev->bus->devices);
 	return dev;
 }
 
-static bool kpi_pci_match(const struct pci_device_id *id, struct pci_dev *dev)
+/* The pci_dev of bus:devfn, made (and its BARs sized) the first time a driver matches it. kpi_pci_lock held. */
+static struct pci_dev *kpi_pci_get_dev(unsigned int bus, unsigned int devfn)
 {
-	return (id->vendor == PCI_ANY_ID || id->vendor == dev->vendor) &&
-	       (id->device == PCI_ANY_ID || id->device == dev->device) &&
-	       (id->subvendor == PCI_ANY_ID || id->subvendor == dev->subsystem_vendor) &&
-	       (id->subdevice == PCI_ANY_ID || id->subdevice == dev->subsystem_device) &&
-	       !((id->class ^ dev->class) & id->class_mask);
+	struct pci_dev *dev;
+
+	if (kpi_buses[bus])
+		list_for_each_entry(dev, &kpi_buses[bus]->devices, bus_list)
+			if (dev->devfn == devfn)
+				return dev;
+	return kpi_pci_make_dev(bus, devfn);
 }
 
+/* The id_table entry matching these config-space ids (read without touching the device), or NULL */
+static const struct pci_device_id *kpi_pci_match_ids(const struct pci_device_id *id, u32 vendev, u32 subsys, u32 class)
+{
+	for (; id && (id->vendor || id->subvendor || id->class_mask); id++)
+		if ((id->vendor == PCI_ANY_ID || id->vendor == (vendev & 0xffff)) &&
+		    (id->device == PCI_ANY_ID || id->device == (vendev >> 16)) &&
+		    (id->subvendor == PCI_ANY_ID || id->subvendor == (subsys & 0xffff)) &&
+		    (id->subdevice == PCI_ANY_ID || id->subdevice == (subsys >> 16)) &&
+		    !((id->class ^ class) & id->class_mask))
+			return id;
+	return NULL;
+}
+
+/*
+ * Bind a driver to every matching device. The whole topology is walked (all buses, slots, and functions of
+ * multifunction devices); only config-space ids are read until a device matches, so devices other drivers own are
+ * never touched (BAR sizing briefly turns decoding off). A device gets one pci_dev for good.
+ */
 int __pci_register_driver(struct pci_driver *drv, struct module *owner, const char *mod_name)
 {
-	unsigned int bus, devfn;
+	unsigned int bus, slot, fn;
 	int bound = 0;
 
 	drv->driver.name = drv->name;
+	mutex_lock(&kpi_pci_lock);
 	for (bus = 0; bus < KPI_MAX_BUS; bus++) {
-		for (devfn = 0; devfn < 256; devfn++) {
-			struct pci_dev *dev;
-			const struct pci_device_id *id;
+		for (slot = 0; slot < 32; slot++) {
+			bool multi = false;
 
-			if (nt_pci_cfg_read(bus, devfn, 0, 4, &(unsigned int){0}) )
-				continue;
-			dev = kpi_pci_make_dev(bus, devfn);
-			if (!dev)
-				continue;
-			for (id = drv->id_table; id && (id->vendor || id->subvendor || id->class_mask); id++) {
-				if (!kpi_pci_match(id, dev))
-					continue;
+			for (fn = 0; fn < 8; fn++) {
+				unsigned int devfn = PCI_DEVFN(slot, fn), vendev, hdr = 0, rev = 0, subsys = 0;
+				const struct pci_device_id *id;
+				struct pci_dev *dev;
+
+				if (nt_pci_cfg_read(bus, devfn, 0, 4, &vendev) || (vendev & 0xffff) == 0xffff ||
+				    (vendev & 0xffff) == 0)
+					goto next_fn;
+				nt_pci_cfg_read(bus, devfn, 0x0e, 1, &hdr);
+				if (fn == 0)
+					multi = hdr & 0x80;
+				nt_pci_cfg_read(bus, devfn, 0x08, 4, &rev);
+				if ((hdr & 0x7f) == 0)
+					nt_pci_cfg_read(bus, devfn, 0x2c, 4, &subsys);
+				id = kpi_pci_match_ids(drv->id_table, vendev, subsys, rev >> 8);
+				if (!id)
+					goto next_fn;
+				dev = kpi_pci_get_dev(bus, devfn);
+				if (!dev || dev->driver)
+					goto next_fn;			/* no memory, or another driver has it */
 				pr_info("kpi2_pci: %s matches %04x:%04x at %s\n", drv->name, dev->vendor, dev->device, dev_name(&dev->dev));
 				dev->driver = drv;
 				dev->dev.driver = &drv->driver;
+				mutex_unlock(&kpi_pci_lock);	/* probe may register more drivers or sleep for long */
 				if (drv->probe(dev, id) == 0) {
 					bound++;
 				} else {
 					dev->driver = NULL;
 					dev->dev.driver = NULL;
 				}
-				break;
+				mutex_lock(&kpi_pci_lock);
+next_fn:
+				if (fn == 0 && !multi)
+					break;
 			}
 		}
 	}
+	mutex_unlock(&kpi_pci_lock);
 	pr_info("kpi2_pci: %s bound %d device(s)\n", drv->name, bound);
 	return 0;
 }

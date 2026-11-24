@@ -13,6 +13,9 @@
 
 #undef DbgPrint     /* this file calls the real one */
 
+/* exported by ntoskrnl (ntoskrnl.spec), not declared in the DDK headers this driver includes */
+NTSYSAPI NTSTATUS NTAPI ZwFlushBuffersFile(_In_ HANDLE FileHandle, _Out_ PIO_STATUS_BLOCK IoStatusBlock);
+
 #define LKPI_LOG_SIZE (2 * 1024 * 1024)        /* power of two */
 #define LKPI_LOG_TAG 'goLL'
 
