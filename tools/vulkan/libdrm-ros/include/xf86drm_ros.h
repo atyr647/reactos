@@ -14,6 +14,10 @@ void drmRosNodeName(int minor, char *buf, size_t len);
  * Linux. 0 or -EINVAL. */
 int drmRosGetNodeDevid(const char *node, dev_t *devid);
 
+/* A C runtime fd for a handle to a shared Linux file (dma-buf, sync file, syncobj) that this process got from another
+ * one (DuplicateHandle(), inheritance): the counterpart of _get_osfhandle(). The fd owns the handle. -1 on failure. */
+int drmRosFdFromHandle(void *handle);
+
 #ifdef __cplusplus
 }
 #endif

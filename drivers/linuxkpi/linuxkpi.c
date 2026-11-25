@@ -29,6 +29,8 @@ LkpiDispatch(PDEVICE_OBJECT Dev, PIRP Irp)
 {
     PIO_STACK_LOCATION Sp = IoGetCurrentIrpStackLocation(Irp);
 
+    if (LkpiDisplayOwns(Dev))
+        return LkpiDisplayDispatch(Dev, Irp);
     if (LkDiskOwns(Dev))
     {
         if (Sp->MajorFunction == IRP_MJ_DEVICE_CONTROL)
@@ -44,6 +46,15 @@ LkpiDispatch(PDEVICE_OBJECT Dev, PIRP Irp)
         case IRP_MJ_DEVICE_CONTROL: return DrmControl(Dev, Irp);
         default: return DrmClean(Dev, Irp);
     }
+}
+
+/* internal device control: the disks' SCSI requests, or the display device's */
+static NTSTATUS NTAPI
+LkpiInternalDispatch(PDEVICE_OBJECT Dev, PIRP Irp)
+{
+    if (LkpiDisplayOwns(Dev))
+        return LkpiDisplayDispatch(Dev, Irp);
+    return LkDiskScsi(Dev, Irp);
 }
 
 /* TRUE if Option appears in the boot options (HKLM\SYSTEM\CurrentControlSet\Control\SystemStartOptions):
@@ -175,6 +186,7 @@ LkpiGpuThread(PVOID Context)
     if (LkpiLoadGroup(LkpiEmbeddedGpuTable, LKPI_GPU_MODULE_COUNT, "GPU"))
         DbgPrint("LKPI: GPU group loaded (%u modules)\n", (ULONG)LKPI_GPU_MODULE_COUNT);
     LkpiCreateDrmNodes(DriverObject);
+    LkpiDisplayGpuLoaded();
     PsTerminateSystemThread(STATUS_SUCCESS);
 }
 #endif
@@ -203,7 +215,7 @@ DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
     DriverObject->MajorFunction[IRP_MJ_CLOSE] = LkpiDispatch;
     DriverObject->MajorFunction[IRP_MJ_CLEANUP] = LkpiDispatch;
     DriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL] = LkpiDispatch;
-    DriverObject->MajorFunction[IRP_MJ_INTERNAL_DEVICE_CONTROL] = LkDiskScsi;
+    DriverObject->MajorFunction[IRP_MJ_INTERNAL_DEVICE_CONTROL] = LkpiInternalDispatch;
     DriverObject->MajorFunction[IRP_MJ_PNP] = LkDiskPnp;
     DriverObject->MajorFunction[IRP_MJ_POWER] = LkDiskPower;
 
@@ -217,8 +229,11 @@ DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
     {
         HANDLE Th;
 
+        LkpiDisplayInit(DriverObject, TRUE);
         if (NT_SUCCESS(PsCreateSystemThread(&Th, THREAD_ALL_ACCESS, NULL, NULL, NULL, LkpiGpuThread, DriverObject)))
             ZwClose(Th);
+        else
+            LkpiDisplayGpuLoaded();     /* nothing to wait for */
     }
     else
     {

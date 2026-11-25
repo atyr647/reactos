@@ -147,14 +147,68 @@ static int drm_unmap(ros_map *m)
     return ok;
 }
 
-/* <poll.h>: no sync files exist here (include/poll.h) */
+/*
+ * Readiness of one Linux file (IOCTL_LKPI_FILE_POLL), waiting up to timeout ms (< 0: no limit). Revents as
+ * <poll.h>: the driver uses Linux's EPOLL* bits, which have the same values. POLLNVAL if fd is not such a file.
+ */
+static short poll_one(int fd, short events, int timeout)
+{
+    HANDLE h = fd < 0 ? INVALID_HANDLE_VALUE : (HANDLE)_get_osfhandle(fd);
+    LKPI_FILE_POLL req;
+    DWORD got = 0;
+
+    if (h == INVALID_HANDLE_VALUE)
+        return POLLNVAL;
+    req.Events = (unsigned short)events & (POLLIN | POLLPRI | POLLOUT);
+    req.TimeoutMs = timeout;
+    req.Revents = 0;
+    req.Reserved = 0;
+    if (!DeviceIoControl(h, IOCTL_LKPI_FILE_POLL, &req, sizeof(req), &req, sizeof(req), &got, NULL))
+        return POLLNVAL;
+    return (short)(req.Revents & (POLLIN | POLLPRI | POLLOUT | POLLERR | POLLHUP));
+}
+
+/*
+ * <poll.h>. One fd waits in the driver. Several: each is looked at in turn, the wait going to one fd at a time in
+ * short slices, so a file that becomes ready is noticed within a few milliseconds (sync files usually come one at a
+ * time: Mesa merges them).
+ */
 int poll(struct pollfd *fds, nfds_t nfds, int timeout)
 {
-    (void)fds;
-    (void)nfds;
-    (void)timeout;
-    errno = ENOSYS;
-    return -1;
+    ULONGLONG start = GetTickCount64();
+    nfds_t i, turn = 0, live = 0;
+    int ready;
+
+    if (nfds && !fds)
+    {
+        errno = EFAULT;
+        return -1;
+    }
+    for (i = 0; i < nfds; i++)
+        live += fds[i].fd >= 0;
+    for (;;)
+    {
+        ready = 0;
+        for (i = 0; i < nfds; i++)
+        {
+            fds[i].revents = 0;
+            if (fds[i].fd < 0)
+                continue;
+            /* a single fd waits in the driver for the whole timeout */
+            fds[i].revents = poll_one(fds[i].fd, fds[i].events, live == 1 ? timeout : 0);
+            ready += fds[i].revents != 0;
+        }
+        if (ready || live <= 1 || timeout == 0)
+            return ready;
+        if (timeout > 0 && GetTickCount64() - start >= (ULONGLONG)timeout)
+            return 0;
+        /* wait a little on the next fd (any of them becoming ready ends the round early for that one) */
+        while (fds[turn % nfds].fd < 0)
+            turn++;
+        if (poll_one(fds[turn % nfds].fd, fds[turn % nfds].events, 2))
+            continue;           /* look at all of them again */
+        turn++;
+    }
 }
 
 int fcntl(int fd, int cmd, ...)

@@ -113,7 +113,8 @@ Every external symbol of these 14 modules is provided (measured with `nm`; see `
 What is real: memory/page layer, PCI config + BAR sizing + probe, interrupt connect (legacy line via the HAL), firmware
 file loading (`\\SystemRoot\\system32\\firmware\\<name>`, name with `/` -> `\\`), workqueues, timers, hrtimers, kthreads.
 What is a stub: sysfs/debugfs, runtime PM, ACPI, hwmon, backlight, i2c-algo-bit, perf, IOMMU, MSI/MSI-X (vector 0 = INTx only),
-dma-buf import/export, shmem, cache attributes (WC/UC) for system pages.
+dma-buf import/export, shmem, cache attributes (WC/UC) for system pages. (Later milestones replaced several of these:
+MSI/MSI-X, dma-buf/sync files/shmem, i2c; see below.)
 
 ### Trying it on real hardware (untested, expect failures)
 1. Put the GPU firmware on the CD/disk: from linux-firmware copy `amdgpu/*.bin` for your chip (Navi 31 / 7900 XT:
@@ -208,6 +209,60 @@ the buffer mapped, also while a child process holds the handle, leaves no trace 
 Kernel bugs fixed on the way (upstream ReactOS): `MiIsPteOnPdeBoundary(PointerPte + 1)` expanded to
 `(ULONG_PTR)PointerPte + 1` (one byte, not one PTE), so unmapping any user MDL mapping that owned a whole page table
 asserted; `VirtualQuery` asserted on device-memory VADs (`VadDevicePhysicalMemory`).
+
+## Milestone: the ReactOS desktop on a Linux KMS driver
+With the GPU group loaded, the desktop is drawn by the Linux display driver instead of the firmware framebuffer: the
+Linux driver sets the monitor's preferred mode on its own scanout buffer, and win32k's generic `framebuf.dll` draws
+into that buffer. Pieces:
+* `kpi/kpi2_drm.c`: an in-kernel DRM client, as Linux's fbdev emulation uses (`drm_client_init`,
+  `drm_client_modeset_probe`, `drm_client_framebuffer_create`, XRGB8888). The mode is set before the buffer is mapped
+  (`drm_client_buffer_vmap` pins it), so a buffer of a VRAM-helper or TTM driver is pinned in VRAM where it is scanned
+  out, not in system memory. Its hotplug callback sets the mode again after a monitor change, its restore callback
+  after a program that took the display over (`drmkms.exe`, a Vulkan program with direct display) closes its fd. The
+  first minor with a connected connector wins.
+* `display.c`: `\Device\LkpiDisplay`. Its one internal ioctl waits (up to 120 s) for the GPU group, which loads late,
+  then starts the client and returns the buffer's address, size, pitch and the mode.
+* `win32ss/drivers/miniport/lkpi` (`lkpivmp.sys`): the video miniport. The GPU's PCI device belongs to the Linux driver,
+  so this is a root-enumerated PnP miniport (`Root\LKPI_DISPLAY`): legacy detection needs firmware bus descriptions that
+  UEFI machines do not have. Without `/LINUXKPI_GPU` it declines (`LkpiVmp: no \Device\LkpiDisplay`), and the
+  desktop uses the firmware framebuffer as before.
+* win32k (`eng/device.c`, `mdevobj.c`): with several display devices and no multi-monitor support, win32k enabled all
+  of them and fell back to the first; it now prefers the LinuxKPI display and enables only that one.
+* bochs (QEMU only): the tree patch sets `VBE_DISPI_NOCLEARMEM`, because QEMU's VBE clears video memory from offset 0
+  on every mode set and wiped the desktop when another program set a mode.
+
+Verified in QEMU (bochs-drm): `desktop on minor 0 (Virtual-1): 1280x800@75, pitch 5120, device memory`, the desktop
+draws normally, and after `drmkms.exe` takes card 0 over and exits, the desktop comes back intact (the buffer stays
+pinned at VRAM page 0). Not verified with amdgpu.
+
+## Milestone: sharing GPU buffers and fences (dma-buf, sync files, syncobjs)
+Linux drivers share buffers and fences as fds: a PRIME export gives a dma-buf fd, a fence becomes a sync file fd, a
+syncobj can be exported as an fd. Vulkan uses them for swapchains, external memory and semaphores, and between
+processes (a compositor, a game launcher's overlay, DXVK/vkd3d's shared resources). They now work as on Linux:
+* `kpi/kpi2_file.c`: the VFS pieces Linux's own `drivers/dma-buf/dma-buf.c` and `sync_file.c` need, which are now
+  compiled into kpi2 unchanged: anon inodes and pseudo mounts, `struct file` with reference counts (the last `fput()`
+  in atomic context is deferred to a worker, as Linux does), shmem files for GEM objects (zeroed pages in the mapping's
+  xarray), and the fd calls. Plus `kpi_file_poll()`, which runs a file's `poll` with a real poll table.
+* fds are NT handles in the calling process: `get_unused_fd_flags()` opens `\Device\LkpiFile` (not a kernel handle,
+  so it belongs to the process that made the ioctl), `fd_install()` puts the file into that file object, `fget()`
+  looks a handle up (user-mode access checks; anything not a LinuxKPI file is `EBADF`). Closing the last handle drops
+  the file. So handle inheritance and `DuplicateHandle()` share a dma-buf between processes, with the same lifetime
+  rules as Linux fds.
+* `drmdev.c`: on such a handle, `IOCTL_LKPI_DRM` reaches the file's `unlocked_ioctl` (dma-buf and sync file ioctls),
+  `IOCTL_LKPI_DRM_MMAP` maps a dma-buf (the same fault-recording path as DRM buffers), `IOCTL_LKPI_FILE_POLL` waits for
+  it (in 100 ms slices, so a process being terminated is not held).
+* libdrm-ros turns the handles into C runtime fds and back in every ioctl that carries one (PRIME, syncobj fds, sync
+  file export/import on a dma-buf, `SYNC_IOC_MERGE`, amdgpu fence to sync file), and `poll()` is real.
+
+`tools/vulkan/sharetest.c` checks it with vgem, Linux's virtual GEM driver (built as a test module only, with syncobjs
+enabled in the tree patch; it is not part of the boot image: append
+`drm_shmem_helper.ko;vgem/vgem.ko` to `LKPI_GPU_MODULES` to test): export, mmap of the dma-buf, import on another fd (same
+pages), self-import, import after every GEM handle is gone, `dup()`, errors; a child process that inherits the handle,
+imports it and rewrites the pixels; sync files (poll timeout, wake-up from another thread, merge, poll of the dma-buf
+itself, import into another dma-buf); syncobjs (sync file in, fd to another DRM fd, sync file out, wait); 2000
+export/import/close rounds without a handle leak. `SHARETEST: ALL PASS` in QEMU; counting live Linux files showed the
+same number before and after two full runs, so dma-bufs, sync files and GEM objects are freed. platform devices now
+get their Linux names (vgem's `drm_dev_init()` copies it and failed with ENOMEM without one).
 
 ## Milestone: Linux USB stack (xHCI + usbcore + HID) running
 

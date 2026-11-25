@@ -1,5 +1,8 @@
 
 add_subdirectory(bochs)
+if(ARCH STREQUAL "amd64")
+    add_subdirectory(lkpi)       # needs the LinuxKPI host (drivers/linuxkpi)
+endif()
 add_subdirectory(vbe)
 add_subdirectory(vga)
 #add_subdirectory(vga_new)

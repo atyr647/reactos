@@ -60,7 +60,7 @@ MDEVOBJ_Create(
 {
     PMDEVOBJ pmdev = NULL;
     PPDEVOBJ ppdev;
-    PGRAPHICS_DEVICE pGraphicsDevice;
+    PGRAPHICS_DEVICE pGraphicsDevice, pKmsDevice;
     DEVMODEW dmDefault;
     PDEVMODEW localPdm;
     ULONG iDevNum = 0;
@@ -82,11 +82,17 @@ MDEVOBJ_Create(
 
     pmdev->cDev = 0;
 
+    /* A Linux KMS display (LinuxKPI) is the only one enabled: the Linux driver owns that GPU, and another miniport
+     * for the same card (bochsmp in QEMU) would reprogram it. Spanning several displays is not implemented anyway. */
+    pKmsDevice = pustrDeviceName ? NULL : EngpGetLinuxKmsPrimaryDevice();
+
     while (TRUE)
     {
         /* Get the right graphics devices: either the specified one, or all of them (one after one) */
         if (pustrDeviceName)
             pGraphicsDevice = (iDevNum == 0) ? EngpFindGraphicsDevice(pustrDeviceName, 0) : NULL;
+        else if (pKmsDevice)
+            pGraphicsDevice = (iDevNum == 0) ? pKmsDevice : NULL;
         else
             pGraphicsDevice = EngpFindGraphicsDevice(NULL, iDevNum);
         iDevNum++;

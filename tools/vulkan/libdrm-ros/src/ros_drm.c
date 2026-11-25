@@ -9,9 +9,13 @@
  *    (drivers/linuxkpi/lkpi_drm.h); the result is 0 or -errno as on Linux.
  *  - Devices are found by opening each node and asking which device it belongs to (IOCTL_LKPI_DRM_INFO).
  *
- * Not available: anything that passes an fd between processes or into the kernel (dma-buf/prime fds, syncobj fds,
- * sync files): the kernel side has no fd table, those ioctls fail with an errno. DRM events (read() on the fd) are not
- * delivered yet.
+ *  - Linux fds the driver hands out or takes (dma-buf/prime fds, syncobj fds, sync files) are handles in this process
+ *    to \Device\LkpiFile objects, each holding the Linux file. ros_ioctl() turns them into C runtime fds and back
+ *    (fd_args), so they work as on Linux: close() drops the file, dup() shares it, poll() waits on it, and mmap()
+ *    maps a dma-buf. To give one to another process, duplicate its handle (_get_osfhandle(), DuplicateHandle()) or
+ *    let the process inherit it; drmRosFdFromHandle() makes an fd of the handle on the other side.
+ *
+ * Not available yet: DRM events (read() on a DRM fd).
  */
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -25,6 +29,8 @@
 
 #include "xf86drm.h"
 #include "drm.h"
+#include "amdgpu_drm.h"
+#include "libsync.h"
 #include "drm_fourcc.h"
 #include "lkpi_drm.h"
 #include "xf86drm_ros.h"
@@ -96,7 +102,62 @@ static int linux_errno(int e)
     return EIO;
 }
 
-/* One Linux ioctl on a DRM node. Returns the driver's result (>= 0) or -errno (this C runtime's numbering). */
+/*
+ * ioctls that carry fds. In the kernel an fd is the value of a handle (to a \Device\LkpiFile object, or any handle for
+ * an fd the driver does not know, which it rejects with EBADF); here it is a C runtime fd. FD_IN: the caller's fd is
+ * turned into its handle on the way in, and put back afterwards. FD_OUT: a handle the driver created in this process
+ * becomes a new C runtime fd, which owns it.
+ */
+struct dma_buf_sync_file_ros { uint32_t flags; int32_t fd; };
+#define ROS_DMA_BUF_IOCTL_EXPORT_SYNC_FILE _IOWR('b', 2, struct dma_buf_sync_file_ros)
+#define ROS_DMA_BUF_IOCTL_IMPORT_SYNC_FILE _IOW('b', 3, struct dma_buf_sync_file_ros)
+enum { FD_IN = 1, FD_OUT = 2 };
+static const struct { unsigned long request; unsigned short offset; unsigned char dir; } fd_args[] = {
+    { DRM_IOCTL_PRIME_HANDLE_TO_FD, offsetof(struct drm_prime_handle, fd), FD_OUT },
+    { DRM_IOCTL_PRIME_FD_TO_HANDLE, offsetof(struct drm_prime_handle, fd), FD_IN },
+    { DRM_IOCTL_SYNCOBJ_HANDLE_TO_FD, offsetof(struct drm_syncobj_handle, fd), FD_OUT },
+    { DRM_IOCTL_SYNCOBJ_FD_TO_HANDLE, offsetof(struct drm_syncobj_handle, fd), FD_IN },
+    { ROS_DMA_BUF_IOCTL_EXPORT_SYNC_FILE, offsetof(struct dma_buf_sync_file_ros, fd), FD_OUT },
+    { ROS_DMA_BUF_IOCTL_IMPORT_SYNC_FILE, offsetof(struct dma_buf_sync_file_ros, fd), FD_IN },
+    { SYNC_IOC_MERGE, offsetof(struct sync_merge_data, fd2), FD_IN },
+    { SYNC_IOC_MERGE, offsetof(struct sync_merge_data, fence), FD_OUT },
+    /* out.handle is a sync file fd only for AMDGPU_FENCE_TO_HANDLE_GET_SYNC_FILE_FD (see ros_ioctl) */
+    { DRM_IOCTL_AMDGPU_FENCE_TO_HANDLE, offsetof(union drm_amdgpu_fence_to_handle, out.handle), FD_OUT },
+};
+
+/* the kernel's value for a caller's fd: its handle, or -1 (EBADF there) */
+static int32_t fd_to_kernel(int32_t fd)
+{
+    HANDLE h = fd < 0 ? INVALID_HANDLE_VALUE : (HANDLE)_get_osfhandle(fd);
+
+    return h == INVALID_HANDLE_VALUE || (uintptr_t)h > 0x7FFFFFFF ? -1 : (int32_t)(uintptr_t)h;
+}
+
+/* a C runtime fd for a handle the driver created in this process (the fd owns it), or -1 (the handle is closed) */
+static int32_t fd_from_kernel(int32_t value)
+{
+    HANDLE h = (HANDLE)(uintptr_t)(uint32_t)value;
+    int fd;
+
+    if (value <= 0)
+        return -1;
+    fd = _open_osfhandle((intptr_t)h, _O_RDWR | _O_BINARY);
+    if (fd < 0)
+        CloseHandle(h);
+    return fd;
+}
+
+int drmRosFdFromHandle(void *handle)
+{
+    int fd = _open_osfhandle((intptr_t)handle, _O_RDWR | _O_BINARY);
+
+    if (fd < 0)
+        errno = EMFILE;
+    return fd;
+}
+
+/* One Linux ioctl on a DRM node or shared file. Returns the driver's result (>= 0) or -errno (this C runtime's
+ * numbering). fds in the argument are translated (fd_args). */
 static int ros_ioctl(HANDLE h, unsigned long request, void *arg)
 {
     unsigned long size = _IOC_SIZE(request);
@@ -105,6 +166,9 @@ static int ros_ioctl(HANDLE h, unsigned long request, void *arg)
     LKPI_DRM_IOCTL *io = total <= sizeof(stackbuf) ? (LKPI_DRM_IOCTL *)stackbuf : malloc(total);
     DWORD got = 0;
     int ret;
+    size_t i;
+    int32_t value;
+    BOOL fds = FALSE;
 
     if (!io)
         return -ENOMEM;
@@ -119,15 +183,43 @@ static int ros_ioctl(HANDLE h, unsigned long request, void *arg)
     io->Pad = 0;
     if (size)
         memcpy(io->Data, arg, size);
+    /* a union: in.what is gone once the driver writes out.handle; only the sync file case returns an fd */
+    fds = request != DRM_IOCTL_AMDGPU_FENCE_TO_HANDLE ||
+          ((union drm_amdgpu_fence_to_handle *)arg)->in.what == AMDGPU_FENCE_TO_HANDLE_GET_SYNC_FILE_FD;
+    for (i = 0; fds && i < sizeof(fd_args) / sizeof(fd_args[0]); i++)
+        if (fd_args[i].request == request && fd_args[i].dir == FD_IN)
+        {
+            memcpy(&value, io->Data + fd_args[i].offset, sizeof(value));
+            value = fd_to_kernel(value);
+            memcpy(io->Data + fd_args[i].offset, &value, sizeof(value));
+        }
     if (!DeviceIoControl(h, IOCTL_LKPI_DRM, io, (DWORD)(hdr + size), io, (DWORD)(hdr + size), &got, NULL))
     {
         ret = -win32_errno(GetLastError());
         goto out;
     }
+    ret = io->Result < 0 ? -linux_errno((int)-io->Result) : (int)io->Result;
+    for (i = 0; fds && i < sizeof(fd_args) / sizeof(fd_args[0]); i++)
+        if (fd_args[i].request == request)
+        {
+            if (fd_args[i].dir == FD_IN)
+            {
+                /* the caller keeps its fd, not the handle value the driver saw */
+                memcpy(io->Data + fd_args[i].offset, (char *)arg + fd_args[i].offset, sizeof(value));
+            }
+            else
+            {
+                /* a handle the driver made (only on success) becomes an fd; on failure the field stays -1 */
+                memcpy(&value, io->Data + fd_args[i].offset, sizeof(value));
+                value = ret < 0 ? -1 : fd_from_kernel(value);
+                if (ret >= 0 && value < 0)
+                    ret = -EMFILE;
+                memcpy(io->Data + fd_args[i].offset, &value, sizeof(value));
+            }
+        }
     /* the driver writes back only what it may (read direction); the rest is the caller's own input */
     if (size)
         memcpy(arg, io->Data, size);
-    ret = io->Result < 0 ? -linux_errno((int)-io->Result) : (int)io->Result;
 out:
     if ((unsigned char *)io != stackbuf)
         free(io);
@@ -713,7 +805,7 @@ int drmPrimeHandleToFD(int fd, uint32_t handle, uint32_t flags, int *prime_fd)
     struct drm_prime_handle args = { .handle = handle, .flags = flags, .fd = -1 };
 
     if (drmIoctl(fd, DRM_IOCTL_PRIME_HANDLE_TO_FD, &args))
-        return -errno;      /* no fds in the kernel: fails until dma-buf sharing is bridged */
+        return -errno;
     *prime_fd = args.fd;
     return 0;
 }

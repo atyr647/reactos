@@ -109,7 +109,7 @@ int __cpuhp_setup_state(enum cpuhp_state state, const char *name, bool invoke, i
 void mmu_notifier_synchronize(void) { }
 void rcu_barrier(void) { }
 int do_wait_intr(wait_queue_head_t *wq, wait_queue_entry_t *wait) { schedule(); return 0; }
-void __wake_up_locked(struct wait_queue_head *wq_head, unsigned int mode, int nr) { __wake_up(wq_head, mode, nr, NULL); }
+/* __wake_up_locked(): kpi_core.c */
 bool cancel_work(struct work_struct *work) { return cancel_work_sync(work); }
 unsigned int jiffies_to_usecs(const unsigned long j) { return j * (1000000 / HZ); }
 unsigned long nsecs_to_jiffies(u64 n) { return nsecs_to_jiffies64(n); }
@@ -385,12 +385,6 @@ int dma_set_mask(struct device *dev, u64 mask) { return 0; }
 int dma_set_coherent_mask(struct device *dev, u64 mask) { return 0; }
 dma_addr_t dma_map_resource(struct device *dev, phys_addr_t phys_addr, size_t size, enum dma_data_direction dir, unsigned long attrs) { return phys_addr; }
 void dma_unmap_resource(struct device *dev, dma_addr_t addr, size_t size, enum dma_data_direction dir, unsigned long attrs) { }
-struct dma_buf_attachment *dma_buf_dynamic_attach(struct dma_buf *dmabuf, struct device *dev, const struct dma_buf_attach_ops *importer_ops, void *importer_priv) { return ERR_PTR(-ENOSYS); }
-struct sg_table *dma_buf_map_attachment(struct dma_buf_attachment *attach, enum dma_data_direction dir) { return ERR_PTR(-ENOSYS); }
-void dma_buf_unmap_attachment(struct dma_buf_attachment *attach, struct sg_table *sg, enum dma_data_direction dir) { }
-void dma_buf_move_notify(struct dma_buf *dmabuf) { }
-int dma_buf_pin(struct dma_buf_attachment *attach) { return -ENOSYS; }
-void dma_buf_unpin(struct dma_buf_attachment *attach) { }
 
 /* ---- PCI extras ------------------------------------------------------------------------------ */
 static int kpi_pcie_cap(struct pci_dev *dev) { return pci_find_capability(dev, PCI_CAP_ID_EXP); }
@@ -656,6 +650,10 @@ void guid_gen(guid_t *lu)
 	lu->b[7] = (lu->b[7] & 0x0F) | 0x40;
 	lu->b[8] = (lu->b[8] & 0x3F) | 0x80;
 }
+static void kpi_platform_device_release(struct device *dev)
+{
+	kfree(to_platform_device(dev));
+}
 struct platform_device *platform_device_register_full(const struct platform_device_info *pdevinfo)
 {
 	struct platform_device *pd = kzalloc(sizeof(*pd), GFP_KERNEL);
@@ -665,6 +663,13 @@ struct platform_device *platform_device_register_full(const struct platform_devi
 	pd->id = pdevinfo->id;
 	device_initialize(&pd->dev);
 	pd->dev.parent = pdevinfo->parent;
+	pd->dev.release = kpi_platform_device_release;
+	/* as Linux names them: DRM copies it (drm_dev_init(): dev->unique), and fails with ENOMEM without one */
+	if (pd->id == PLATFORM_DEVID_NONE ? dev_set_name(&pd->dev, "%s", pd->name) :
+	    dev_set_name(&pd->dev, "%s.%d", pd->name, pd->id)) {
+		put_device(&pd->dev);
+		return ERR_PTR(-ENOMEM);
+	}
 	return pd;
 }
 void platform_device_unregister(struct platform_device *pdev) { if (pdev) put_device(&pdev->dev); }

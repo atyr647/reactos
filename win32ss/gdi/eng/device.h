@@ -21,6 +21,11 @@ NTAPI
 EngpUpdateMonitorDevices(
     _In_ PGRAPHICS_DEVICE pGraphicsDevice);
 
+/* The primary display if it is a Linux KMS display (LinuxKPI), else NULL */
+PGRAPHICS_DEVICE
+NTAPI
+EngpGetLinuxKmsPrimaryDevice(VOID);
+
 PGRAPHICS_DEVICE
 NTAPI
 EngpFindGraphicsDevice(

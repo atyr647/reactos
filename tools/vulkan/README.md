@@ -70,8 +70,12 @@ here the kernel driver exists, so:
 * **libdrm-ros** (`libdrm-ros/`): libdrm for ReactOS. Upstream libdrm's KMS API (`xf86drmMode.c`) and `libdrm_amdgpu`
   compile unchanged; `src/ros_drm.c` replaces the Linux-only `xf86drm.c` (devices found by opening
   `\\.\LKPIDRM<n>` and asking the kernel which device it is, ioctls as one `DeviceIoControl` each), `src/ros_posix.c`
-  gives `mmap`/`munmap` of DRM buffers, `fcntl`, `sysconf`, `getline`, `ioctl`. DRM nodes are character devices, so
-  fds are ordinary C runtime fds (`open`, `close`, `dup` work).
+  gives `mmap`/`munmap` of DRM buffers and dma-bufs, `poll`, `fcntl`, `sysconf`, `getline`, `ioctl`. DRM nodes are
+  character devices, so fds are ordinary C runtime fds (`open`, `close`, `dup` work).
+  Shared buffers and fences (dma-buf/PRIME fds, sync files, syncobj fds) are handles the kernel creates in the process;
+  every ioctl that passes one converts between it and a C runtime fd, so they behave like Linux fds: `close()` frees,
+  `dup()` shares, `poll()` waits, `mmap()` maps a dma-buf. To hand one to another process, duplicate or inherit the
+  handle (`_get_osfhandle()`) and make it an fd there with `drmRosFdFromHandle()`.
   Two Windows-x64 details that would otherwise break silently: Linux errno values above 34 are translated (EOPNOTSUPP
   is 95 on Linux, 130 here; ETIME, ECANCELED, ... too), and pointers are no longer cast through 32-bit `unsigned long`
   (`xf86drmMode.c`'s `VOID2U64`). `libdrm-ros/abicheck.sh` compares every DRM and amdgpu ioctl number (which encodes
@@ -95,6 +99,9 @@ Result: `vulkan_radeon.dll` (22 MB, no LLVM, imports only kernel32/user32/gdi32/
     RADVTEST:   | libdrm-ros: device 0: driver bochs-drm, primary minor 0, render minor -1, PCI 1234:1111
     RADVTEST:   | libdrm-ros: device 1: driver bochs-drm, primary minor 1, render minor -1, PCI 1234:1111
     RADVTEST: no AMD GPU (expected without one, e.g. in QEMU)
+
+    SHARETEST: ALL PASS                      sharetest.c with vgem: dma-buf export/mmap/import, a child process
+                                             importing an inherited dma-buf, sync files and poll(), syncobj fds
 
 `radvtest` on an AMD GPU creates a device, compiles a compute shader with ACO, runs it and checks all 16384 values it
 writes. That part has not run yet: QEMU has no AMD GPU, and this Mesa has no simulated device any more (its

@@ -1,0 +1,19 @@
+; LinuxKPI KMS display miniport: the desktop on a Linux KMS driver (active only with the boot option /LINUXKPI_GPU).
+; A virtual adapter: the root bus enumerates Root\LKPI_DISPLAY and PnP loads the miniport for it.
+[AddReg]
+HKLM,"SYSTEM\CurrentControlSet\Enum\Root\LKPI_DISPLAY\0000","Service",0x00000000,"LkpiDisplay"
+HKLM,"SYSTEM\CurrentControlSet\Enum\Root\LKPI_DISPLAY\0000","ClassGUID",0x00000000,"{4D36E968-E325-11CE-BFC1-08002BE10318}"
+HKLM,"SYSTEM\CurrentControlSet\Enum\Root\LKPI_DISPLAY\0000","Class",0x00000000,"Display"
+HKLM,"SYSTEM\CurrentControlSet\Enum\Root\LKPI_DISPLAY\0000","HardwareID",0x00010000,"LKPI_DISPLAY"
+HKLM,"SYSTEM\CurrentControlSet\Enum\Root\LKPI_DISPLAY\0000","DeviceDesc",0x00000000,"Linux KMS display (LinuxKPI)"
+
+HKLM,"SYSTEM\CurrentControlSet\Services\LkpiDisplay","ErrorControl",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Services\LkpiDisplay","Group",0x00000000,"Video"
+HKLM,"SYSTEM\CurrentControlSet\Services\LkpiDisplay","ImagePath",0x00020000,"system32\drivers\lkpivmp.sys"
+HKLM,"SYSTEM\CurrentControlSet\Services\LkpiDisplay","Start",0x00010001,0x00000003
+HKLM,"SYSTEM\CurrentControlSet\Services\LkpiDisplay","Type",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\LkpiDisplay\Video","Service",0x00000000,"LkpiDisplay"
+
+HKLM,"SYSTEM\CurrentControlSet\Services\LkpiDisplay\Device0","Device Description",0x00000000,"Linux KMS display (LinuxKPI)"
+HKLM,"SYSTEM\CurrentControlSet\Services\LkpiDisplay\Device0","InstalledDisplayDrivers",0x00010000,"framebuf"
+HKLM,"SYSTEM\CurrentControlSet\Services\LkpiDisplay\Device0","VgaCompatible",0x00010001,0

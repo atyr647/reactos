@@ -144,3 +144,28 @@
  endif
  
  ifeq ($(CONFIG_X86_KERNEL_IBT),y)
+--- a/drivers/gpu/drm/tiny/bochs.c
++++ b/drivers/gpu/drm/tiny/bochs.c
+@@ -348,7 +348,9 @@
+ 	bochs_dispi_write(bochs, VBE_DISPI_INDEX_Y_OFFSET,    0);
+ 
+ 	bochs_dispi_write(bochs, VBE_DISPI_INDEX_ENABLE,
+-			  VBE_DISPI_ENABLED | VBE_DISPI_LFB_ENABLED);
++			  VBE_DISPI_ENABLED | VBE_DISPI_LFB_ENABLED |
++			  VBE_DISPI_NOCLEARMEM);	/* LinuxKPI: the device would clear VRAM from offset 0, i.e.
++						 * whichever buffer TTM placed there (the desktop's) */
+ 
+ 	drm_dev_exit(idx);
+ }
+--- a/drivers/gpu/drm/vgem/vgem_drv.c
++++ b/drivers/gpu/drm/vgem/vgem_drv.c
+@@ -109,7 +109,8 @@
+ }
+ 
+ static const struct drm_driver vgem_driver = {
+-	.driver_features		= DRIVER_GEM | DRIVER_RENDER,
++	/* LinuxKPI: syncobjs too, for the buffer and fence sharing test (vgem is a test driver here, not shipped) */
++	.driver_features		= DRIVER_GEM | DRIVER_RENDER | DRIVER_SYNCOBJ | DRIVER_SYNCOBJ_TIMELINE,
+ 	.open				= vgem_open,
+ 	.postclose			= vgem_postclose,
+ 	.ioctls				= vgem_ioctls,

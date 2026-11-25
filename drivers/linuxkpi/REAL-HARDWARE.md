@@ -94,17 +94,18 @@ tables to drivers; the log says whether VFCT is present) or the ROM BAR, DRM dev
 VRAM write-combined; the mapping follows the buffer when the driver moves it between VRAM and system memory). The
 mapping path is verified with bochs in QEMU, not with amdgpu.
 
-The display core (DC) is built in, with the DCN 3.2 display firmware, so amdgpu can drive the monitor itself. Expect
-the screen to go dark once amdgpu has initialised, even when it worked: DC takes the display over from the firmware,
-and nothing sets a mode on it afterwards (there is no Linux console, and the ReactOS desktop still draws into the old
-firmware framebuffer). The USB log says whether amdgpu got that far. `tools/vulkan/drmkms.c` is the test that sets a
-mode through DRM and draws into it; it is verified with bochs in QEMU only.
+The display core (DC) is built in, with the DCN 3.2 display firmware, so amdgpu can drive the monitor itself, and the
+desktop then runs on it: the LinuxKPI display miniport asks amdgpu to set the monitor's preferred mode and the desktop
+draws into amdgpu's scanout buffer in VRAM (`LKPI: display: desktop on card 0 (...)` in the log). This is verified
+with the bochs DRM driver in QEMU, not with amdgpu. If amdgpu fails, or finds no monitor, the desktop falls back to the
+firmware framebuffer; if amdgpu takes the display over and then fails to set a mode, the screen stays dark: the USB
+log says how far it got.
 
 **Vulkan on the GPU (RADV).** `tools/vulkan/build-radv-x64.sh` builds Mesa's RADV for ReactOS on top of this driver.
 To try it, put `vulkan-1.dll` (from `build-vulkan-x64.sh`), `vulkan_radeon.dll`, `radeon_icd.x86_64.json`,
 `amdgpu.ids`, `radvtest.exe` and `libdrmtest.exe` in one folder on a USB stick, boot the experimental GPU entry, and run
-`radvtest.exe` from a command prompt (the screen may be dark once amdgpu has loaded: type blind, or look at the
-`LKPILOG.TXT` stick afterwards; `radvtest` prints to the debugger and the console). What it should say on a working
+`radvtest.exe` from a command prompt (if the screen is dark, type blind, or look at the `LKPILOG.TXT` stick
+afterwards; `radvtest` prints to the debugger and the console). What it should say on a working
 RX 7900 XT:
 
     RADVTEST:   device 0: 'AMD Radeon RX 7900 XT (RADV NAVI31)' 1002:744c ...

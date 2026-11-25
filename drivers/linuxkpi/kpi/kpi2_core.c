@@ -405,6 +405,7 @@ struct work_struct *current_work(void) { return system_wq->current_work; }
 
 extern int kpi_mm_init(void);
 extern void kpi3_init_wqs(void);
+extern int kpi_file_init(void);
 
 static int __init kpi2_init(void)
 {
@@ -414,7 +415,7 @@ static int __init kpi2_init(void)
 		return ret;
 	kpi_system_wqs_init();
 	kpi3_init_wqs();
-	return 0;
+	return kpi_file_init();		/* files, fds, dma-buf (after the workqueues: a deferred fput uses one) */
 }
 
 static void __exit kpi2_exit(void) { }

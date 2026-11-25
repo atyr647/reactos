@@ -54,6 +54,16 @@ NTSTATUS LkDiskControl(PDEVICE_OBJECT Dev, PIRP Irp);
 VOID LX_ABI nt_input_event(unsigned int Type, unsigned int Code, int Value);
 BOOLEAN LkpiSymbolize(ULONG64 Addr, char *Buf, ULONG Len);
 NTSTATUS LkpiCreateDrmNodes(PDRIVER_OBJECT DriverObject);
+/* drmdev.c: Linux file descriptors as handles to \Device\LkpiFile objects (kpi/kpi2_file.c) */
+int LX_ABI nt_fd_reserve(void);
+void LX_ABI nt_fd_unreserve(int Fd);
+int LX_ABI nt_fd_install(int Fd, void *File);
+void * LX_ABI nt_fd_get(int Fd);
+/* display.c: \Device\LkpiDisplay, the desktop on a Linux KMS driver */
+VOID LkpiDisplayInit(PDRIVER_OBJECT DriverObject, BOOLEAN GpuEnabled);
+VOID LkpiDisplayGpuLoaded(VOID);
+BOOLEAN LkpiDisplayOwns(PDEVICE_OBJECT Dev);
+NTSTATUS LkpiDisplayDispatch(PDEVICE_OBJECT Dev, PIRP Irp);
 void * LX_ABI LkpiMissing(const char *Name);
 void * LX_ABI nt_acpi_get_table(const char *Sig);
 /* lkpilog.c: bring-up log on a USB stick (X:\LKPILOG.TXT). Every DbgPrint in this driver goes through it. */

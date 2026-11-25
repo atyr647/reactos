@@ -177,7 +177,15 @@ void __folio_put(struct folio *folio)
 	struct page *p = &folio->page;
 	__free_pages(p, p->private ? p->private : 0);
 }
-void __folio_batch_release(struct folio_batch *pvec) { folio_batch_reinit(pvec); }
+/* drop the references the batch holds (drm_gem_put_pages() hands shmem pages back this way) */
+void __folio_batch_release(struct folio_batch *pvec)
+{
+	unsigned int i;
+
+	for (i = 0; i < folio_batch_count(pvec); i++)
+		folio_put(pvec->folios[i]);
+	folio_batch_reinit(pvec);
+}
 void copy_page(void *to, void *from) { memcpy(to, from, PAGE_SIZE); }
 void mark_page_accessed(struct page *page) { }
 void folio_mark_accessed(struct folio *folio) { }
@@ -194,6 +202,7 @@ __asm__(".globl rep_stos_alternative\n"
 /* ---- caching attributes: not applied to system pages (the region is cached memory) ---------- */
 int set_pages_array_wc(struct page **pages, int addrinarray) { return 0; }
 int set_pages_array_uc(struct page **pages, int addrinarray) { return 0; }
+int set_pages_array_wb(struct page **pages, int addrinarray) { return 0; }
 int set_pages_wb(struct page *page, int numpages) { return 0; }
 pgprot_t pgprot_writecombine(pgprot_t prot)
 {
@@ -401,19 +410,6 @@ void shrinker_register(struct shrinker *shrinker) { }
 void shrinker_free(struct shrinker *shrinker) { kfree(shrinker); }
 
 /* ---- shmem (swap-backed GEM pages), dma-buf, sync_file, eventfd, agp: not supported yet --------- */
-struct folio *shmem_read_folio_gfp(struct address_space *mapping, pgoff_t index, gfp_t gfp) { return ERR_PTR(-ENOSYS); }
-struct page *shmem_read_mapping_page_gfp(struct address_space *mapping, pgoff_t index, gfp_t gfp) { return ERR_PTR(-ENOSYS); }
-struct dma_buf *dma_buf_export(const struct dma_buf_export_info *exp_info) { return ERR_PTR(-ENOSYS); }
-struct dma_buf *dma_buf_get(int fd) { return ERR_PTR(-ENOSYS); }
-void dma_buf_put(struct dma_buf *dmabuf) { }
-struct dma_buf_attachment *dma_buf_attach(struct dma_buf *dmabuf, struct device *dev) { return ERR_PTR(-ENOSYS); }
-void dma_buf_detach(struct dma_buf *dmabuf, struct dma_buf_attachment *attach) { }
-int dma_buf_begin_cpu_access(struct dma_buf *dmabuf, enum dma_data_direction dir) { return -ENOSYS; }
-int dma_buf_end_cpu_access(struct dma_buf *dmabuf, enum dma_data_direction dir) { return -ENOSYS; }
-struct sg_table *dma_buf_map_attachment_unlocked(struct dma_buf_attachment *attach, enum dma_data_direction dir) { return ERR_PTR(-ENOSYS); }
-void dma_buf_unmap_attachment_unlocked(struct dma_buf_attachment *attach, struct sg_table *sg_table, enum dma_data_direction dir) { }
-struct sync_file *sync_file_create(struct dma_fence *fence) { return NULL; }
-struct dma_fence *sync_file_get_fence(int fd) { return NULL; }
 struct eventfd_ctx *eventfd_ctx_fdget(int fd) { return ERR_PTR(-ENOSYS); }
 void eventfd_ctx_put(struct eventfd_ctx *ctx) { }
 void eventfd_signal_mask(struct eventfd_ctx *ctx, __poll_t mask) { }

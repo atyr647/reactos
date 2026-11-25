@@ -52,3 +52,37 @@ typedef struct _LKPI_DRM_INFO
     unsigned char Bus, Dev, Func, Revision;
     char Driver[32];            /* Linux driver name, e.g. "amdgpu", "bochs-drm" */
 } LKPI_DRM_INFO;
+
+/*
+ * The desktop on a Linux KMS driver: \Device\LkpiDisplay, kernel-mode callers only (IRP_MJ_INTERNAL_DEVICE_CONTROL),
+ * used by the LinuxKPI video miniport (win32ss/drivers/miniport/lkpi). START waits for the GPU modules, sets the
+ * preferred mode of the first card with a connected monitor on one XRGB8888 buffer and returns it. Layout shared with
+ * kpi/kpi2_drm.c (struct kpi_display_info): 64 bytes.
+ */
+#define IOCTL_LKPI_DISPLAY_START CTL_CODE(FILE_DEVICE_VIDEO, 0x810, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+typedef struct _LKPI_DISPLAY_INFO
+{
+    unsigned long long Address;     /* kernel (system space) address of the scanout buffer */
+    unsigned int Width, Height;
+    unsigned int Pitch;             /* bytes per line */
+    unsigned int Bpp;               /* 32: XRGB8888 */
+    unsigned int Refresh;           /* Hz */
+    unsigned int Minor;             /* the DRM card */
+    char Connector[32];             /* e.g. "DP-1" */
+} LKPI_DISPLAY_INFO;
+
+/*
+ * poll() of a Linux file reached through a handle: a shared one (dma-buf, sync file, syncobj fd; their handles are
+ * the fds Linux reports, on \\Device\\LkpiFile) or a DRM node. Events/Revents: Linux EPOLL* bits. TimeoutMs < 0:
+ * wait without limit.
+ */
+#define IOCTL_LKPI_FILE_POLL  CTL_CODE(FILE_DEVICE_UNKNOWN, 0x804, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+typedef struct _LKPI_FILE_POLL
+{
+    unsigned int Events;
+    int TimeoutMs;
+    unsigned int Revents;
+    unsigned int Reserved;
+} LKPI_FILE_POLL;

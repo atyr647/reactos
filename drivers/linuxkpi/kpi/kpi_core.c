@@ -270,15 +270,37 @@ void __init_waitqueue_head(struct wait_queue_head *wq_head, const char *name, st
 	INIT_LIST_HEAD(&wq_head->head);
 }
 
-int __wake_up(struct wait_queue_head *wq_head, unsigned int mode, int nr_exclusive, void *key)
+/* wq_head->lock held, as in Linux: wake functions may unlink their entry (autoremove) but not take the lock */
+static void kpi_wake_up_common(struct wait_queue_head *wq_head, unsigned int mode, void *key)
 {
 	struct wait_queue_entry *curr, *next;
 
 	list_for_each_entry_safe(curr, next, &wq_head->head, entry)
 		if (curr->func)
 			curr->func(curr, mode, 0, key);
+}
+
+int __wake_up(struct wait_queue_head *wq_head, unsigned int mode, int nr_exclusive, void *key)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&wq_head->lock, flags);
+	kpi_wake_up_common(wq_head, mode, key);
+	spin_unlock_irqrestore(&wq_head->lock, flags);
 	return 1;
 }
+
+void __wake_up_locked_key(struct wait_queue_head *wq_head, unsigned int mode, void *key)
+{
+	kpi_wake_up_common(wq_head, mode, key);
+}
+EXPORT_SYMBOL(__wake_up_locked_key);
+
+void __wake_up_locked(struct wait_queue_head *wq_head, unsigned int mode, int nr)
+{
+	kpi_wake_up_common(wq_head, mode, NULL);
+}
+EXPORT_SYMBOL(__wake_up_locked);
 
 int default_wake_function(struct wait_queue_entry *wq_entry, unsigned mode, int flags, void *key) { return 1; }
 int autoremove_wake_function(struct wait_queue_entry *wq_entry, unsigned mode, int sync, void *key)

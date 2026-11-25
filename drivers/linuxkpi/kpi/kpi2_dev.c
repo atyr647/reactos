@@ -480,42 +480,8 @@ int seq_write(struct seq_file *seq, const void *data, size_t len) { return -ENOS
 void __seq_puts(struct seq_file *m, const char *s) { }
 void seq_putc(struct seq_file *m, char c) { }
 
-/* ---- file/fd/inode objects used for GEM mmap and dma-buf export: not supported yet --------- */
-int get_unused_fd_flags(unsigned flags) { return -ENOSYS; }
-void put_unused_fd(unsigned int fd) { }
-void fd_install(unsigned int fd, struct file *file) { }
-struct fd fdget(unsigned int fd) { struct fd f = { 0 }; return f; }
-void fput(struct file *file) { if (file) { kfree(file->f_inode); kfree(file); } }
-void iput(struct inode *inode) { if (inode) kfree(inode); }
-struct file *anon_inode_getfile(const char *name, const struct file_operations *fops, void *priv, int flags) { return ERR_PTR(-ENOSYS); }
-struct inode *alloc_anon_inode(struct super_block *s)
-{
-	struct inode *inode = kzalloc(sizeof(*inode), GFP_KERNEL);
-
-	if (!inode)
-		return ERR_PTR(-ENOMEM);
-	inode->i_sb = s;
-	inode->i_mapping = &inode->i_data;
-	inode->i_data.host = inode;
-	return inode;
-}
+/* ---- files, fds, inodes, shmem, pseudo file systems: kpi2_file.c ------------------------------- */
 struct file *dentry_open(const struct path *path, int flags, const struct cred *cred) { return ERR_PTR(-ENOSYS); }
-int init_pseudo(struct fs_context *fc, unsigned long magic) { return -ENOSYS; }
-void kill_anon_super(struct super_block *sb) { }
-struct file *shmem_file_setup(const char *name, loff_t size, unsigned long flags)
-{
-	/* A file whose mapping is never backed by pages: enough for DRM's GEM objects, which only keep it around */
-	struct file *f = kzalloc(sizeof(*f), GFP_KERNEL);
-	struct inode *inode = kzalloc(sizeof(*inode), GFP_KERNEL);
-
-	if (!f || !inode) { kfree(f); kfree(inode); return ERR_PTR(-ENOMEM); }
-	inode->i_mapping = &inode->i_data;
-	inode->i_data.host = inode;
-	inode->i_size = size;
-	f->f_inode = inode;
-	f->f_mapping = &inode->i_data;
-	return f;
-}
 /* unmap_mapping_range(): kpi2_drm.c (user mappings of DRM buffers follow buffer moves) */
 
 /* ---- firmware framebuffer / aperture, i2c, acpi, hdmi, components, video: nothing to do --------- */

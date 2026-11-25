@@ -1,5 +1,5 @@
 
-add_library(linuxkpi MODULE linuxkpi.c elfldr.c shim.c drmdev.c input.c lkpidisk.c netbus.c lkpilog.c linuxkpi.rc)
+add_library(linuxkpi MODULE linuxkpi.c elfldr.c shim.c drmdev.c display.c input.c lkpidisk.c netbus.c lkpilog.c linuxkpi.rc)
 set_module_type(linuxkpi kernelmodedriver)
 add_importlibs(linuxkpi ntoskrnl hal)
 target_link_libraries(linuxkpi ${PSEH_LIB})

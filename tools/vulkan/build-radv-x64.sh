@@ -4,7 +4,8 @@
 # Everything is built in $WORK (default ./radv-work); nothing third-party is added to the repo.
 # Needs: x86_64-w64-mingw32-gcc/g++, meson, ninja, pkg-config, python3 with mako and pyyaml, glslangValidator,
 #        git, curl. No LLVM: RADV compiles shaders with ACO.
-# Result: $WORK/out/{vulkan_radeon.dll, radeon_icd.x86_64.json, amdgpu.ids, radvtest.exe, libdrmtest.exe}. The loader
+# Result: $WORK/out/{vulkan_radeon.dll, radeon_icd.x86_64.json, amdgpu.ids, radvtest.exe, libdrmtest.exe,
+#         sharetest.exe}. The loader
 #         (vulkan-1.dll, with loader-win64.patch) comes from build-vulkan-x64.sh; copy it next to these.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -57,5 +58,7 @@ fi
 x86_64-w64-mingw32-gcc -O1 -Wall -I headers/include "$HERE/radvtest.c" -o out/radvtest.exe
 x86_64-w64-mingw32-gcc -O1 -Wall -static -include ros_posix.h -I"$DRM/include/libdrm" "$HERE/libdrmtest.c" \
   -L"$DRM/lib" -ldrm_amdgpu -ldrm -lpthread -o out/libdrmtest.exe
+x86_64-w64-mingw32-gcc -O1 -Wall -static -include ros_posix.h -I"$DRM/include/libdrm" "$HERE/sharetest.c" \
+  -L"$DRM/lib" -ldrm -lpthread -o out/sharetest.exe
 echo "done: $WORK/out (add vulkan-1.dll from build-vulkan-x64.sh)"
 echo "check imports against a ReactOS build:  $HERE/rosimp.py <reactos-build-dir> $WORK/out/*.dll $WORK/out/*.exe"

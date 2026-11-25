@@ -1,6 +1,6 @@
 /*
- * libdrm-ros: <poll.h> for libsync.h and Mesa's sync-file helpers. Sync files are Linux fds that the kernel side
- * cannot create here (no fd table), so there is never one to wait for: poll() fails with ENOSYS.
+ * libdrm-ros: <poll.h> for libsync.h and Mesa's sync-file helpers. poll() works on the fds of shared Linux files
+ * (sync files, dma-bufs) and DRM nodes; not on sockets or pipes (POLLNVAL).
  */
 #pragma once
 
