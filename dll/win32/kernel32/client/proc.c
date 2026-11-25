@@ -2125,12 +2125,74 @@ ProcessIdToSessionId(IN DWORD dwProcessId,
 #define RemoveFromHandle(x,y)  ((x) = (HANDLE)((ULONG_PTR)(x) & ~(y)))
 C_ASSERT(PROCESS_PRIORITY_CLASS_REALTIME == (PROCESS_PRIORITY_CLASS_HIGH + 1));
 
+ULONG BasepMarkHandleListInheritable(IN PVOID AttributeList, OUT HANDLE *Marked, IN ULONG MaxMarked);
+VOID BasepRestoreHandleList(IN HANDLE *Marked, IN ULONG Count);
+
+static
+BOOL
+WINAPI
+BasepCreateProcessInternalW(IN HANDLE hUserToken,
+                       IN LPCWSTR lpApplicationName,
+                       IN LPWSTR lpCommandLine,
+                       IN LPSECURITY_ATTRIBUTES lpProcessAttributes,
+                       IN LPSECURITY_ATTRIBUTES lpThreadAttributes,
+                       IN BOOL bInheritHandles,
+                       IN DWORD dwCreationFlags,
+                       IN LPVOID lpEnvironment,
+                       IN LPCWSTR lpCurrentDirectory,
+                       IN LPSTARTUPINFOW lpStartupInfo,
+                       IN LPPROCESS_INFORMATION lpProcessInformation,
+                       OUT PHANDLE hNewToken);
+
 /*
  * @implemented
+ *
+ * Wrapper: handles named in a PROC_THREAD_ATTRIBUTE_HANDLE_LIST are made
+ * inheritable for the duration of the call.
  */
 BOOL
 WINAPI
 CreateProcessInternalW(IN HANDLE hUserToken,
+                       IN LPCWSTR lpApplicationName,
+                       IN LPWSTR lpCommandLine,
+                       IN LPSECURITY_ATTRIBUTES lpProcessAttributes,
+                       IN LPSECURITY_ATTRIBUTES lpThreadAttributes,
+                       IN BOOL bInheritHandles,
+                       IN DWORD dwCreationFlags,
+                       IN LPVOID lpEnvironment,
+                       IN LPCWSTR lpCurrentDirectory,
+                       IN LPSTARTUPINFOW lpStartupInfo,
+                       IN LPPROCESS_INFORMATION lpProcessInformation,
+                       OUT PHANDLE hNewToken)
+{
+    HANDLE Marked[32];
+    ULONG Count = 0;
+    BOOL Result;
+
+    if (bInheritHandles && (dwCreationFlags & 0x00080000 /* EXTENDED_STARTUPINFO_PRESENT */) &&
+        lpStartupInfo && lpStartupInfo->cb >= sizeof(STARTUPINFOW) + sizeof(PVOID))
+    {
+        /* STARTUPINFOEXW: the attribute list pointer follows the STARTUPINFOW */
+        PVOID List = *(PVOID *)((PUCHAR)lpStartupInfo + sizeof(STARTUPINFOW));
+        if (List) Count = BasepMarkHandleListInheritable(List, Marked, RTL_NUMBER_OF(Marked));
+    }
+
+    Result = BasepCreateProcessInternalW(hUserToken, lpApplicationName, lpCommandLine,
+                                         lpProcessAttributes, lpThreadAttributes, bInheritHandles,
+                                         dwCreationFlags, lpEnvironment, lpCurrentDirectory,
+                                         lpStartupInfo, lpProcessInformation, hNewToken);
+
+    if (Count) BasepRestoreHandleList(Marked, Count);
+    return Result;
+}
+
+/*
+ * @implemented
+ */
+static
+BOOL
+WINAPI
+BasepCreateProcessInternalW(IN HANDLE hUserToken,
                        IN LPCWSTR lpApplicationName,
                        IN LPWSTR lpCommandLine,
                        IN LPSECURITY_ATTRIBUTES lpProcessAttributes,

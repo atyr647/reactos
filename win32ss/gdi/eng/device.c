@@ -32,12 +32,15 @@ InitDeviceImpl(VOID)
     return STATUS_SUCCESS;
 }
 
+/* The name of the service (miniport) driving a graphics device, from HARDWARE\DEVICEMAP\VIDEO */
 static
 BOOLEAN
-EngpHasVgaDriver(
-    _In_ PGRAPHICS_DEVICE pGraphicsDevice)
+EngpGetServiceName(
+    _In_ PGRAPHICS_DEVICE pGraphicsDevice,
+    _Out_writes_(cchServiceName) PWSTR awcServiceName,
+    _In_ ULONG cchServiceName)
 {
-    WCHAR awcDeviceKey[256], awcServiceName[100];
+    WCHAR awcDeviceKey[256];
     PWSTR lastBkSlash;
     NTSTATUS Status;
     ULONG cbValue;
@@ -85,7 +88,7 @@ EngpHasVgaDriver(
     }
 
     /* Read service name */
-    cbValue = sizeof(awcServiceName);
+    cbValue = cchServiceName * sizeof(WCHAR);
     Status = RegQueryValue(hkey, L"Service", REG_SZ, awcServiceName, &cbValue);
     ZwClose(hkey);
     if (!NT_SUCCESS(Status))
@@ -93,9 +96,35 @@ EngpHasVgaDriver(
         ERR("Could not read Service registry value in %S: 0x%08lx\n", awcDeviceKey, Status);
         return FALSE;
     }
+    return TRUE;
+}
+
+static
+BOOLEAN
+EngpHasVgaDriver(
+    _In_ PGRAPHICS_DEVICE pGraphicsDevice)
+{
+    WCHAR awcServiceName[100];
 
     /* Device is using VGA driver if service name is 'VGASave' (case insensitive) */
-    return (_wcsicmp(awcServiceName, L"VGASave") == 0);
+    return EngpGetServiceName(pGraphicsDevice, awcServiceName, ARRAYSIZE(awcServiceName)) &&
+           _wcsicmp(awcServiceName, L"VGASave") == 0;
+}
+
+/*
+ * The desktop on a Linux KMS driver (LinuxKPI, win32ss/drivers/miniport/lkpi). Only present when the Linux driver owns
+ * the GPU (boot option /LINUXKPI_GPU) and found a monitor; then it is the primary display: another miniport for the
+ * same card (e.g. bochsmp in QEMU) would program hardware that the Linux driver drives.
+ */
+static
+BOOLEAN
+EngpIsLinuxKmsDisplay(
+    _In_ PGRAPHICS_DEVICE pGraphicsDevice)
+{
+    WCHAR awcServiceName[100];
+
+    return EngpGetServiceName(pGraphicsDevice, awcServiceName, ARRAYSIZE(awcServiceName)) &&
+           _wcsicmp(awcServiceName, L"LkpiDisplay") == 0;
 }
 
 /*
@@ -291,11 +320,21 @@ EngpUpdateGraphicsDeviceList(VOID)
         EngReleaseSemaphore(ghsemGraphicsDeviceList);
     }
 
-    /* Choose a primary device (if none already exists) */
+    /* Choose a primary device (if none already exists): a Linux KMS display, else the first non-VGA device */
     if (!gpPrimaryGraphicsDevice)
     {
         for (pGraphicsDevice = gpGraphicsDeviceFirst;
              pGraphicsDevice;
+             pGraphicsDevice = pGraphicsDevice->pNextGraphicsDevice)
+        {
+            if (EngpIsLinuxKmsDisplay(pGraphicsDevice))
+            {
+                pNewPrimaryGraphicsDevice = pGraphicsDevice;
+                break;
+            }
+        }
+        for (pGraphicsDevice = gpGraphicsDeviceFirst;
+             pGraphicsDevice && !pNewPrimaryGraphicsDevice;
              pGraphicsDevice = pGraphicsDevice->pNextGraphicsDevice)
         {
             if (!EngpHasVgaDriver(pGraphicsDevice))
@@ -788,6 +827,15 @@ EngpRegisterGraphicsDevice(
     }
 
     return pGraphicsDevice;
+}
+
+PGRAPHICS_DEVICE
+NTAPI
+EngpGetLinuxKmsPrimaryDevice(VOID)
+{
+    PGRAPHICS_DEVICE pGraphicsDevice = gpPrimaryGraphicsDevice;
+
+    return (pGraphicsDevice && EngpIsLinuxKmsDisplay(pGraphicsDevice)) ? pGraphicsDevice : NULL;
 }
 
 PGRAPHICS_DEVICE

@@ -2535,8 +2535,15 @@ LdrpLoadDll(IN BOOLEAN Redirected,
                 /* Check if this is a .NET Image */
                 if (!(LdrEntry->Flags & LDRP_COR_IMAGE))
                 {
+                    /* Set up implicit TLS for DLLs loaded after process start
+                       (process start is handled by LdrpInitializeTls) */
+                    Status = STATUS_SUCCESS;
+                    if (!LdrpInLdrInit)
+                        Status = LdrpHandleTlsData(LdrEntry);
+
                     /* Walk the Import Descriptor */
-                    Status = LdrpWalkImportDescriptor(DllPath, LdrEntry);
+                    if (NT_SUCCESS(Status))
+                        Status = LdrpWalkImportDescriptor(DllPath, LdrEntry);
                 }
 
                 /* Update load count, unless it's locked */

@@ -312,6 +312,32 @@ NetEnumerateComputerNames(
 }
 
 
+/*
+ * Azure AD join information: this system is never Azure AD joined, which
+ * Windows reports as success with a NULL information pointer.
+ */
+HRESULT
+WINAPI
+NetGetAadJoinInformation(
+    _In_opt_ LPCWSTR pcszTenantId,
+    _Out_ PVOID *ppJoinInfo)
+{
+    TRACE("NetGetAadJoinInformation(%s %p)\n", debugstr_w(pcszTenantId), ppJoinInfo);
+    if (!ppJoinInfo)
+        return E_INVALIDARG;
+    *ppJoinInfo = NULL;
+    return S_OK;
+}
+
+VOID
+WINAPI
+NetFreeAadJoinInformation(
+    _In_opt_ PVOID pJoinInfo)
+{
+    UNREFERENCED_PARAMETER(pJoinInfo);
+}
+
+
 NET_API_STATUS
 WINAPI
 NetGetJoinInformation(

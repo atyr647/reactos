@@ -27,6 +27,7 @@ list(APPEND SOURCE
     sec/ac.c
     sec/audit.c
     sec/lsa.c
+    sec/mandatory.c
     sec/misc.c
     sec/safer.c
     sec/sec.c

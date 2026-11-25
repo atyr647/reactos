@@ -73,7 +73,12 @@ CreateProcessInternalA(HANDLE hToken,
     UNICODE_STRING ApplicationName;
     UNICODE_STRING CurrentDirectory;
     BOOL bRetVal;
-    STARTUPINFOW StartupInfo;
+    /* STARTUPINFOEXW layout: a STARTUPINFOW followed by the attribute list pointer */
+    struct
+    {
+        STARTUPINFOW StartupInfo;
+        PVOID lpAttributeList;
+    } StartupInfoEx;
 
     DPRINT("dwCreationFlags %x, lpEnvironment %p, lpCurrentDirectory %p, "
             "lpStartupInfo %p, lpProcessInformation %p\n",
@@ -81,15 +86,23 @@ CreateProcessInternalA(HANDLE hToken,
             lpStartupInfo, lpProcessInformation);
 
     /* Copy Startup Info */
-    RtlMoveMemory(&StartupInfo, lpStartupInfo, sizeof(*lpStartupInfo));
+    RtlMoveMemory(&StartupInfoEx.StartupInfo, lpStartupInfo, sizeof(*lpStartupInfo));
+    StartupInfoEx.lpAttributeList = NULL;
+    if ((dwCreationFlags & 0x00080000 /* EXTENDED_STARTUPINFO_PRESENT */) &&
+        lpStartupInfo->cb >= sizeof(STARTUPINFOA) + sizeof(PVOID))
+    {
+        /* Carry the attribute list over and tell the Unicode side the structure is extended */
+        StartupInfoEx.lpAttributeList = *(PVOID *)((PUCHAR)lpStartupInfo + sizeof(STARTUPINFOA));
+        StartupInfoEx.StartupInfo.cb = sizeof(StartupInfoEx);
+    }
 
     /* Initialize all strings to nothing */
     CommandLine.Buffer = NULL;
     ApplicationName.Buffer = NULL;
     CurrentDirectory.Buffer = NULL;
-    StartupInfo.lpDesktop = NULL;
-    StartupInfo.lpReserved = NULL;
-    StartupInfo.lpTitle = NULL;
+    StartupInfoEx.StartupInfo.lpDesktop = NULL;
+    StartupInfoEx.StartupInfo.lpReserved = NULL;
+    StartupInfoEx.StartupInfo.lpTitle = NULL;
 
     /* Convert the Command line */
     if (lpCommandLine)
@@ -114,17 +127,17 @@ CreateProcessInternalA(HANDLE hToken,
     if (lpStartupInfo->lpReserved)
     {
         BasepAnsiStringToHeapUnicodeString(lpStartupInfo->lpReserved,
-                                           &StartupInfo.lpReserved);
+                                           &StartupInfoEx.StartupInfo.lpReserved);
     }
     if (lpStartupInfo->lpDesktop)
     {
         BasepAnsiStringToHeapUnicodeString(lpStartupInfo->lpDesktop,
-                                           &StartupInfo.lpDesktop);
+                                           &StartupInfoEx.StartupInfo.lpDesktop);
     }
     if (lpStartupInfo->lpTitle)
     {
         BasepAnsiStringToHeapUnicodeString(lpStartupInfo->lpTitle,
-                                           &StartupInfo.lpTitle);
+                                           &StartupInfoEx.StartupInfo.lpTitle);
     }
 
     /* Call the Unicode function */
@@ -137,7 +150,7 @@ CreateProcessInternalA(HANDLE hToken,
                                      dwCreationFlags,
                                      lpEnvironment,
                                      CurrentDirectory.Buffer,
-                                     &StartupInfo,
+                                     &StartupInfoEx.StartupInfo,
                                      lpProcessInformation,
                                      hNewToken);
 
@@ -145,9 +158,9 @@ CreateProcessInternalA(HANDLE hToken,
     RtlFreeUnicodeString(&ApplicationName);
     RtlFreeUnicodeString(&CommandLine);
     RtlFreeUnicodeString(&CurrentDirectory);
-    RtlFreeHeap(RtlGetProcessHeap(), 0, StartupInfo.lpDesktop);
-    RtlFreeHeap(RtlGetProcessHeap(), 0, StartupInfo.lpReserved);
-    RtlFreeHeap(RtlGetProcessHeap(), 0, StartupInfo.lpTitle);
+    RtlFreeHeap(RtlGetProcessHeap(), 0, StartupInfoEx.StartupInfo.lpDesktop);
+    RtlFreeHeap(RtlGetProcessHeap(), 0, StartupInfoEx.StartupInfo.lpReserved);
+    RtlFreeHeap(RtlGetProcessHeap(), 0, StartupInfoEx.StartupInfo.lpTitle);
 
     /* Return what Unicode did */
     return bRetVal;

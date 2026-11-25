@@ -275,3 +275,63 @@ ULONG WINAPI EtwUpdateTraceW( TRACEHANDLE hSession, LPCWSTR SessionName, PEVENT_
 }
 
 /* EOF */
+
+
+/*
+ * Event registration. ReactOS has no ETW consumers, so providers register
+ * successfully and their events are dropped.
+ */
+ULONG
+NTAPI
+EtwEventRegister(
+    LPCGUID ProviderId,
+    PVOID EnableCallback,
+    PVOID CallbackContext,
+    PULONGLONG RegHandle)
+{
+    if (!ProviderId || !RegHandle) return ERROR_INVALID_PARAMETER;
+    *RegHandle = 1; /* a non-zero handle, nothing behind it */
+    return ERROR_SUCCESS;
+}
+
+ULONG
+NTAPI
+EtwEventUnregister(ULONGLONG RegHandle)
+{
+    return ERROR_SUCCESS;
+}
+
+ULONG
+NTAPI
+EtwEventSetInformation(
+    ULONGLONG RegHandle,
+    ULONG InformationClass,
+    PVOID EventInformation,
+    ULONG InformationLength)
+{
+    return ERROR_SUCCESS;
+}
+
+ULONG
+NTAPI
+EtwEventWrite(
+    ULONGLONG RegHandle,
+    PVOID EventDescriptor,
+    ULONG UserDataCount,
+    PVOID UserData)
+{
+    return ERROR_SUCCESS;
+}
+
+ULONG
+NTAPI
+EtwEventWriteTransfer(
+    ULONGLONG RegHandle,
+    PVOID EventDescriptor,
+    LPCGUID ActivityId,
+    LPCGUID RelatedActivityId,
+    ULONG UserDataCount,
+    PVOID UserData)
+{
+    return ERROR_SUCCESS;
+}

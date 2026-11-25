@@ -257,6 +257,206 @@ GetLogicalProcessorInformation(OUT PSYSTEM_LOGICAL_PROCESSOR_INFORMATION Buffer,
     return TRUE;
 }
 
+
+/*
+ * GetLogicalProcessorInformationEx
+ *
+ * The kernel only reports the legacy SystemLogicalProcessorInformation class
+ * (cores and NUMA nodes, a single processor group). Build the extended
+ * records from that. Cache relationships are not available.
+ * Layouts match the Windows 7+ definitions (x86: core record 44 bytes,
+ * x64: 48 bytes); they are declared privately as the public headers for
+ * these types are kernel-mode only here.
+ */
+typedef struct _K32_GROUP_AFFINITY
+{
+    ULONG_PTR Mask;
+    WORD Group;
+    WORD Reserved[3];
+} K32_GROUP_AFFINITY;
+
+typedef struct _K32_PROCESSOR_GROUP_INFO
+{
+    BYTE MaximumProcessorCount;
+    BYTE ActiveProcessorCount;
+    BYTE Reserved[38];
+    ULONG_PTR ActiveProcessorMask;
+} K32_PROCESSOR_GROUP_INFO;
+
+typedef struct _K32_LPI_EX
+{
+    DWORD Relationship;
+    DWORD Size;
+    union
+    {
+        struct
+        {
+            BYTE Flags;
+            BYTE EfficiencyClass;
+            BYTE Reserved[20];
+            WORD GroupCount;
+            K32_GROUP_AFFINITY GroupMask[1];
+        } Processor;
+        struct
+        {
+            DWORD NodeNumber;
+            BYTE Reserved[18];
+            WORD GroupCount;
+            K32_GROUP_AFFINITY GroupMask[1];
+        } NumaNode;
+        struct
+        {
+            WORD MaximumGroupCount;
+            WORD ActiveGroupCount;
+            BYTE Reserved[20];
+            K32_PROCESSOR_GROUP_INFO GroupInfo[1];
+        } Group;
+    } u;
+} K32_LPI_EX;
+
+#define K32_RELATION_ALL 0xffff
+
+static DWORD
+K32LpiExBuild(IN DWORD Relation,
+              IN PSYSTEM_LOGICAL_PROCESSOR_INFORMATION Legacy,
+              IN ULONG Count,
+              IN ULONG_PTR AllMask,
+              OUT PBYTE Out)
+{
+    BOOL All = (Relation == K32_RELATION_ALL);
+    DWORD Total = 0;
+    ULONG i;
+    ULONG_PTR Mask;
+    BYTE Bits = 0;
+    K32_LPI_EX *Rec;
+
+    for (Mask = AllMask; Mask; Mask >>= 1) Bits += (BYTE)(Mask & 1);
+
+#define K32_EMIT(Rel, Body) \
+    do { \
+        Rec = (K32_LPI_EX *)(Out ? Out + Total : NULL); \
+        if (Rec) { RtlZeroMemory(Rec, sizeof(*Rec)); Rec->Relationship = (Rel); \
+                   Rec->Size = sizeof(*Rec); Body } \
+        Total += sizeof(*Rec); \
+    } while (0)
+
+    if (All || Relation == RelationProcessorCore)
+    {
+        for (i = 0; i < Count; i++)
+        {
+            if (Legacy[i].Relationship != RelationProcessorCore) continue;
+            K32_EMIT(RelationProcessorCore,
+                Rec->u.Processor.Flags = Legacy[i].ProcessorCore.Flags;
+                Rec->u.Processor.GroupCount = 1;
+                Rec->u.Processor.GroupMask[0].Mask = Legacy[i].ProcessorMask;);
+        }
+    }
+
+    if (All || Relation == RelationNumaNode)
+    {
+        for (i = 0; i < Count; i++)
+        {
+            if (Legacy[i].Relationship != RelationNumaNode) continue;
+            K32_EMIT(RelationNumaNode,
+                Rec->u.NumaNode.NodeNumber = Legacy[i].NumaNode.NodeNumber;
+                Rec->u.NumaNode.GroupCount = 1;
+                Rec->u.NumaNode.GroupMask[0].Mask = Legacy[i].ProcessorMask;);
+        }
+    }
+
+    if (All || Relation == RelationProcessorPackage)
+    {
+        /* The kernel has no package information: one package with every processor */
+        K32_EMIT(RelationProcessorPackage,
+            Rec->u.Processor.GroupCount = 1;
+            Rec->u.Processor.GroupMask[0].Mask = AllMask;);
+    }
+
+    if (All || Relation == RelationGroup)
+    {
+        K32_EMIT(RelationGroup,
+            Rec->u.Group.MaximumGroupCount = 1;
+            Rec->u.Group.ActiveGroupCount = 1;
+            Rec->u.Group.GroupInfo[0].MaximumProcessorCount = Bits;
+            Rec->u.Group.GroupInfo[0].ActiveProcessorCount = Bits;
+            Rec->u.Group.GroupInfo[0].ActiveProcessorMask = AllMask;);
+    }
+
+#undef K32_EMIT
+    return Total;
+}
+
+/*
+ * @implemented
+ */
+BOOL
+WINAPI
+GetLogicalProcessorInformationEx(IN DWORD RelationshipType,
+                                 OUT PVOID Buffer,
+                                 IN OUT PDWORD ReturnedLength)
+{
+    NTSTATUS Status = STATUS_SUCCESS;
+    PSYSTEM_LOGICAL_PROCESSOR_INFORMATION Legacy = NULL;
+    SYSTEM_BASIC_INFORMATION Basic;
+    ULONG LegacyLength = 4 * sizeof(*Legacy), Needed = 0, Attempt;
+    DWORD Total;
+
+    if (!ReturnedLength ||
+        (RelationshipType > RelationGroup && RelationshipType != K32_RELATION_ALL) ||
+        RelationshipType == RelationCache)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    /* Fetch the legacy information, growing the buffer as needed */
+    for (Attempt = 0; Attempt < 4; Attempt++)
+    {
+        Legacy = RtlAllocateHeap(RtlGetProcessHeap(), 0, LegacyLength);
+        if (!Legacy)
+        {
+            SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+            return FALSE;
+        }
+
+        Status = NtQuerySystemInformation(SystemLogicalProcessorInformation,
+                                          Legacy, LegacyLength, &Needed);
+        if (Status != STATUS_INFO_LENGTH_MISMATCH) break;
+
+        RtlFreeHeap(RtlGetProcessHeap(), 0, Legacy);
+        Legacy = NULL;
+        LegacyLength = (Needed > LegacyLength) ? Needed : LegacyLength * 2;
+    }
+
+    if (NT_SUCCESS(Status))
+        Status = NtQuerySystemInformation(SystemBasicInformation, &Basic, sizeof(Basic), NULL);
+
+    if (!NT_SUCCESS(Status) || !Legacy)
+    {
+        if (Legacy) RtlFreeHeap(RtlGetProcessHeap(), 0, Legacy);
+        BaseSetLastNTError(NT_SUCCESS(Status) ? STATUS_UNSUCCESSFUL : Status);
+        return FALSE;
+    }
+
+    Needed = Needed / sizeof(*Legacy);
+    Total = K32LpiExBuild(RelationshipType, Legacy, Needed,
+                          (ULONG_PTR)Basic.ActiveProcessorsAffinityMask, NULL);
+
+    if (*ReturnedLength < Total || !Buffer)
+    {
+        RtlFreeHeap(RtlGetProcessHeap(), 0, Legacy);
+        *ReturnedLength = Total;
+        SetLastError(ERROR_INSUFFICIENT_BUFFER);
+        return FALSE;
+    }
+
+    K32LpiExBuild(RelationshipType, Legacy, Needed,
+                  (ULONG_PTR)Basic.ActiveProcessorsAffinityMask, Buffer);
+    RtlFreeHeap(RtlGetProcessHeap(), 0, Legacy);
+    *ReturnedLength = Total;
+    return TRUE;
+}
+
 /*
  * @implemented
  */

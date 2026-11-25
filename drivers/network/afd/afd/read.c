@@ -283,6 +283,19 @@ AcceptExReceiveComplete(PDEVICE_OBJECT DeviceObject, PIRP Irp, PVOID Context)
     IoCompleteRequest(FCB->AcceptIrp, IO_NETWORK_INCREMENT);
     FCB->AcceptIrp = NULL;
 
+    /* The first data went straight into the AcceptEx buffer. Now start the
+     * normal receive buffering, otherwise nothing sent after that first chunk
+     * would ever be read from the connection. */
+    if (!NT_SUCCESS(Irp->IoStatus.Status) || Irp->IoStatus.Information == 0)
+    {
+        FCB->LastReceiveStatus = Irp->IoStatus.Status;
+        FCB->TdiReceiveClosed = TRUE;
+    }
+    else
+    {
+        RefillSocketBuffer(FCB);
+    }
+
     /* Continue receive activity */
     ReceiveActivity(FCB, NULL);
 

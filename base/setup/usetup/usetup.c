@@ -1829,6 +1829,24 @@ CreateInstallPartition:
             CurrentPartition->Volume->New |= VOLUME_NEW_AUTOCREATE;
     }
 
+    /*
+     * Never install over a CD image: on a USB stick written with the ISO, the installation medium itself shows up
+     * as a hard disk with a CDFS partition (Setup then runs from a RAM disk copy, so formatting it would "work"
+     * and silently wipe the user's stick).
+     */
+    if (CurrentPartition->Volume &&
+        (!_wcsicmp(CurrentPartition->Volume->Info.FileSystem, L"CDFS") ||
+         !_wcsicmp(CurrentPartition->Volume->Info.FileSystem, L"UDFS")))
+    {
+        PopupError("This partition holds a CD/DVD image, most likely the\n"
+                   "ReactOS installation medium (USB stick) itself.\n"
+                   "Please select another partition or disk.\n"
+                   "Press ENTER to continue.",
+                   MUIGetString(STRING_CONTINUE),
+                   Ir, POPUP_WAIT_ENTER);
+        return SELECT_PARTITION_PAGE;
+    }
+
     /* Verify the target medium size */
     MaxTargetSize = GetPartEntrySizeInBytes(CurrentPartition);
     if (!IsMediumLargeEnough(MaxTargetSize))

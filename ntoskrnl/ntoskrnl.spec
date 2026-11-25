@@ -589,6 +589,7 @@
 @ stdcall -arch=arm KeFlushIoBuffers(ptr long long)
 @ stdcall KeFlushQueuedDpcs()
 @ stdcall KeGenericCallDpc(ptr ptr)
+@ stdcall -arch=x86_64 KeGetCurrentIrql() KxGetCurrentIrql
 @ stdcall KeGetCurrentThread()
 @ stdcall KeGetPreviousMode()
 @ stdcall KeGetRecommendedSharedDataAlignment()
@@ -614,6 +615,7 @@
 @ stdcall KeInitializeQueue(ptr long)
 @ stdcall KeInitializeSemaphore(ptr long long)
 @ stdcall -arch=i386,arm KeInitializeSpinLock(ptr) _KeInitializeSpinLock
+@ stdcall -arch=x86_64 KeInitializeSpinLock(ptr) KxInitializeSpinLock
 @ stdcall KeInitializeThreadedDpc(ptr ptr ptr)
 @ stdcall KeInitializeTimer(ptr)
 @ stdcall KeInitializeTimerEx(ptr long)
@@ -812,6 +814,7 @@
 @ stdcall MmProtectMdlSystemAddress(ptr long)
 @ stdcall MmQuerySystemSize()
 @ stdcall MmRemovePhysicalMemory(ptr ptr)
+@ stdcall MmReplaceLockedPagesInUserSpace(ptr ptr long)
 @ stdcall MmResetDriverPaging(ptr)
 @ extern MmSectionObjectType
 @ stdcall MmSecureVirtualMemory(ptr long long)
@@ -1462,6 +1465,7 @@
 @ stdcall ZwEnumerateDriverEntries(ptr ptr)
 @ stdcall ZwEnumerateKey(ptr long long ptr long ptr)
 @ stdcall ZwEnumerateValueKey(ptr long long ptr long ptr)
+@ stdcall ZwFlushBuffersFile(ptr ptr)
 @ stdcall ZwFlushInstructionCache(ptr ptr long)
 @ stdcall ZwFlushKey(ptr)
 @ stdcall ZwFlushVirtualMemory(ptr ptr ptr ptr)

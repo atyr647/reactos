@@ -1444,7 +1444,7 @@ QSI_DEF(SystemHandleInformation)
             }
 
             /* Go to the next entry */
-            Handle.Value += sizeof(HANDLE);
+            Handle.Value += 1 << HANDLE_TAG_BITS;   /* handle values step by 4, also on 64-bit */
         }
     }
 
@@ -2659,8 +2659,9 @@ QSI_DEF(SystemExtendedHandleInformation)
                         POBJECT_HEADER ObjectHeader = ObpGetHandleObject(HandleTableEntry);
 
                         /* Filling handle information */
+                        /* The extended class carries full-width process IDs and handle values */
                         HandleInformation->Handles[Index].UniqueProcessId =
-                            (USHORT)(ULONG_PTR) HandleTable->UniqueProcessId;
+                            (ULONG_PTR) HandleTable->UniqueProcessId;
 
                         HandleInformation->Handles[Index].CreatorBackTraceIndex = 0;
 
@@ -2675,7 +2676,7 @@ QSI_DEF(SystemExtendedHandleInformation)
                             HandleTableEntry->ObAttributes & OBJ_HANDLE_ATTRIBUTES;
 
                         HandleInformation->Handles[Index].HandleValue =
-                            (USHORT)(ULONG_PTR) Handle.GenericHandleOverlay;
+                            (ULONG_PTR) Handle.GenericHandleOverlay;
 
                         HandleInformation->Handles[Index].Object = &ObjectHeader->Body;
 
@@ -2693,7 +2694,7 @@ QSI_DEF(SystemExtendedHandleInformation)
             }
 
             /* Go to the next entry */
-            Handle.Value += sizeof(HANDLE);
+            Handle.Value += 1 << HANDLE_TAG_BITS;   /* handle values step by 4, also on 64-bit */
         }
     }
 

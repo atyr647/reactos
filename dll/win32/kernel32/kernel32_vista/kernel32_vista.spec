@@ -20,6 +20,10 @@
 @ stdcall WakeAllConditionVariable(ptr)
 @ stdcall WakeConditionVariable(ptr)
 
+@ stdcall WaitOnAddress(ptr ptr long long)
+@ stdcall WakeByAddressAll(ptr) ntdll_vista.RtlWakeAddressAll
+@ stdcall WakeByAddressSingle(ptr) ntdll_vista.RtlWakeAddressSingle
+
 @ stdcall InitializeCriticalSectionEx(ptr long long)
 
 @ stdcall GetFirmwareEnvironmentVariableExA(str str ptr long long)
@@ -88,3 +92,11 @@
 @ stdcall WaitForThreadpoolTimerCallbacks(ptr long) ntdll_vista.TpWaitForTimer
 @ stdcall WaitForThreadpoolWaitCallbacks(ptr long) ntdll_vista.TpWaitForWait
 @ stdcall WaitForThreadpoolWorkCallbacks(ptr long) ntdll_vista.TpWaitForWork
+@ stdcall PathCchCombineEx(ptr long wstr wstr long)
+@ stdcall PathCchCombine(ptr long wstr wstr)
+@ stdcall PathCchAppend(wstr long wstr)
+@ stdcall PathCchAddBackslash(wstr long)
+@ stdcall PathCchRemoveFileSpec(wstr long)
+@ stdcall PathCchFindExtension(wstr long ptr)
+@ stdcall AddDllDirectory(wstr)
+@ stdcall RemoveDllDirectory(ptr)

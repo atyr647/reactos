@@ -926,6 +926,18 @@ DWORD WINAPI GetExtendedTcpTable(PVOID pTcpTable, PDWORD pdwSize, BOOL bOrder, U
         return ERROR_INVALID_PARAMETER;
     }
 
+    if (ulAf == AF_INET6)
+    {
+        /* There is no IPv6 stack, so there are never any IPv6 endpoints */
+        if (!pTcpTable || *pdwSize < sizeof(DWORD))
+        {
+            *pdwSize = sizeof(DWORD);
+            return ERROR_INSUFFICIENT_BUFFER;
+        }
+        *(PDWORD)pTcpTable = 0; /* dwNumEntries */
+        return NO_ERROR;
+    }
+
     if (ulAf != AF_INET)
     {
         UNIMPLEMENTED;
@@ -1340,6 +1352,18 @@ DWORD WINAPI GetExtendedUdpTable(PVOID pUdpTable, PDWORD pdwSize, BOOL bOrder, U
     if (!pdwSize)
     {
         return ERROR_INVALID_PARAMETER;
+    }
+
+    if (ulAf == AF_INET6)
+    {
+        /* There is no IPv6 stack, so there are never any IPv6 endpoints */
+        if (!pUdpTable || *pdwSize < sizeof(DWORD))
+        {
+            *pdwSize = sizeof(DWORD);
+            return ERROR_INSUFFICIENT_BUFFER;
+        }
+        *(PDWORD)pUdpTable = 0; /* dwNumEntries */
+        return NO_ERROR;
     }
 
     if (ulAf != AF_INET)

@@ -619,6 +619,26 @@ BOOL WINAPI GetPointerType(UINT32 id, POINTER_INPUT_TYPE *type)
     return TRUE;
 }
 
+/**********************************************************************
+ * GetPointerDevice [USER32.@]
+ */
+BOOL WINAPI GetPointerDevice(HANDLE device, POINTER_DEVICE_INFO *info)
+{
+    FIXME("(%p %p): stub\n", device, info);
+    SetLastError(ERROR_INVALID_PARAMETER);
+    return FALSE;
+}
+
+/**********************************************************************
+ * GetPointerPenInfo [USER32.@]
+ */
+BOOL WINAPI GetPointerPenInfo(UINT32 id, void *info)
+{
+    FIXME("(%d %p): stub\n", id, info);
+    SetLastError(ERROR_INVALID_PARAMETER);
+    return FALSE;
+}
+
 BOOL WINAPI GetPointerInfo(UINT32 id, POINTER_INFO *info)
 {
     FIXME("(%d %p): stub\n", id, info);

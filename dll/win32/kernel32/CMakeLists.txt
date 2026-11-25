@@ -35,6 +35,7 @@ list(APPEND SOURCE
     client/perfcnt.c
     client/power.c
     client/proc.c
+    client/procattr.c
     client/procansi.c
     client/resntfy.c
     client/session.c
@@ -44,6 +45,7 @@ list(APPEND SOURCE
     client/sysinfoansi.c
     client/time.c
     client/timerqueue.c
+    client/win8.c
     client/toolhelp.c
     client/utils.c
     client/thread.c

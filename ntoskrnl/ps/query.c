@@ -206,6 +206,37 @@ PspDumpThreadInfoClassName(
 /*
  * @implemented
  */
+/*
+ * Queries that Windows allows with PROCESS_QUERY_LIMITED_INFORMATION (a subset of
+ * PROCESS_QUERY_INFORMATION). Handles that only carry the older, wider right keep working.
+ */
+static
+NTSTATUS
+PspReferenceProcessForLimitedQuery(
+    _In_ HANDLE ProcessHandle,
+    _In_ KPROCESSOR_MODE PreviousMode,
+    _Out_ PEPROCESS *Process)
+{
+    NTSTATUS Status;
+
+    Status = ObReferenceObjectByHandle(ProcessHandle,
+                                       PROCESS_QUERY_LIMITED_INFORMATION,
+                                       PsProcessType,
+                                       PreviousMode,
+                                       (PVOID*)Process,
+                                       NULL);
+    if (Status == STATUS_ACCESS_DENIED)
+    {
+        Status = ObReferenceObjectByHandle(ProcessHandle,
+                                           PROCESS_QUERY_INFORMATION,
+                                           PsProcessType,
+                                           PreviousMode,
+                                           (PVOID*)Process,
+                                           NULL);
+    }
+    return Status;
+}
+
 NTSTATUS
 NTAPI
 NtQueryInformationProcess(
@@ -272,12 +303,7 @@ NtQueryInformationProcess(
             Length = sizeof(PROCESS_BASIC_INFORMATION);
 
             /* Reference the process */
-            Status = ObReferenceObjectByHandle(ProcessHandle,
-                                               PROCESS_QUERY_INFORMATION,
-                                               PsProcessType,
-                                               PreviousMode,
-                                               (PVOID*)&Process,
-                                               NULL);
+            Status = PspReferenceProcessForLimitedQuery(ProcessHandle, PreviousMode, &Process);
             if (!NT_SUCCESS(Status)) break;
 
             /* Protect writes with SEH */
@@ -454,12 +480,7 @@ NtQueryInformationProcess(
             Length = sizeof(KERNEL_USER_TIMES);
 
             /* Reference the process */
-            Status = ObReferenceObjectByHandle(ProcessHandle,
-                                               PROCESS_QUERY_INFORMATION,
-                                               PsProcessType,
-                                               PreviousMode,
-                                               (PVOID*)&Process,
-                                               NULL);
+            Status = PspReferenceProcessForLimitedQuery(ProcessHandle, PreviousMode, &Process);
             if (!NT_SUCCESS(Status)) break;
 
             /* Protect writes with SEH */
@@ -537,12 +558,7 @@ NtQueryInformationProcess(
             Length = sizeof(ULONG);
 
             /* Reference the process */
-            Status = ObReferenceObjectByHandle(ProcessHandle,
-                                               PROCESS_QUERY_INFORMATION,
-                                               PsProcessType,
-                                               PreviousMode,
-                                               (PVOID*)&Process,
-                                               NULL);
+            Status = PspReferenceProcessForLimitedQuery(ProcessHandle, PreviousMode, &Process);
             if (!NT_SUCCESS(Status)) break;
 
             /* Count the number of handles this process has */
@@ -852,12 +868,7 @@ NtQueryInformationProcess(
             PUNICODE_STRING ImageName;
 
             /* Reference the process */
-            Status = ObReferenceObjectByHandle(ProcessHandle,
-                                               PROCESS_QUERY_INFORMATION,
-                                               PsProcessType,
-                                               PreviousMode,
-                                               (PVOID*)&Process,
-                                               NULL);
+            Status = PspReferenceProcessForLimitedQuery(ProcessHandle, PreviousMode, &Process);
             if (!NT_SUCCESS(Status)) break;
 
             /* Get the image path */
@@ -911,13 +922,7 @@ NtQueryInformationProcess(
             POBJECT_NAME_INFORMATION ObjectNameInformation;
 
             /* Reference the process */
-            Status = ObReferenceObjectByHandle(ProcessHandle,
-            // FIXME: Use PROCESS_QUERY_LIMITED_INFORMATION when implemented
-                                               PROCESS_QUERY_INFORMATION,
-                                               PsProcessType,
-                                               PreviousMode,
-                                               (PVOID*)&Process,
-                                               NULL);
+            Status = PspReferenceProcessForLimitedQuery(ProcessHandle, PreviousMode, &Process);
             if (!NT_SUCCESS(Status))
             {
                 break;

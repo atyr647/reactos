@@ -127,3 +127,24 @@ BOOL WINAPI InitializeCriticalSectionEx(OUT LPCRITICAL_SECTION lpCriticalSection
     return TRUE;
 }
 
+
+NTSYSAPI NTSTATUS NTAPI RtlWaitOnAddress(const volatile VOID *, PVOID, SIZE_T, PLARGE_INTEGER);
+
+BOOL
+WINAPI
+WaitOnAddress(volatile VOID *Address, PVOID CompareAddress, SIZE_T AddressSize, DWORD Timeout)
+{
+    LARGE_INTEGER Time;
+    NTSTATUS Status;
+
+    Status = RtlWaitOnAddress((const volatile VOID *)Address,
+                              CompareAddress,
+                              AddressSize,
+                              GetNtTimeout(&Time, Timeout));
+    if (!NT_SUCCESS(Status))
+    {
+        BaseSetLastNTError(Status);
+        return FALSE;
+    }
+    return Status != STATUS_TIMEOUT ? TRUE : (SetLastError(ERROR_TIMEOUT), FALSE);
+}

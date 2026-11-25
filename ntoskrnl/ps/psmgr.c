@@ -18,24 +18,34 @@ PVOID KeUserPopEntrySListEnd;
 PVOID KeUserPopEntrySListFault;
 PVOID KeUserPopEntrySListResume;
 
+/* Vista+ "limited" rights; they live above the NT 5.x access mask range */
+#define PSP_PROCESS_QUERY_LIMITED_INFORMATION   0x1000
+#define PSP_THREAD_SET_LIMITED_INFORMATION      0x0400
+#define PSP_THREAD_QUERY_LIMITED_INFORMATION    0x0800
+#define PSP_THREAD_RESUME                       0x1000
+
 GENERIC_MAPPING PspProcessMapping =
 {
-    STANDARD_RIGHTS_READ    | PROCESS_QUERY_INFORMATION | PROCESS_VM_READ,
+    STANDARD_RIGHTS_READ    | PROCESS_QUERY_INFORMATION | PROCESS_VM_READ |
+    PSP_PROCESS_QUERY_LIMITED_INFORMATION,
     STANDARD_RIGHTS_WRITE   | PROCESS_CREATE_PROCESS    | PROCESS_CREATE_THREAD   |
     PROCESS_VM_OPERATION    | PROCESS_VM_WRITE          | PROCESS_DUP_HANDLE      |
     PROCESS_TERMINATE       | PROCESS_SET_QUOTA         | PROCESS_SET_INFORMATION |
     PROCESS_SUSPEND_RESUME,
     STANDARD_RIGHTS_EXECUTE | SYNCHRONIZE,
-    PROCESS_ALL_ACCESS
+    PROCESS_ALL_ACCESS | PSP_PROCESS_QUERY_LIMITED_INFORMATION
 };
 
 GENERIC_MAPPING PspThreadMapping =
 {
-    STANDARD_RIGHTS_READ    | THREAD_GET_CONTEXT      | THREAD_QUERY_INFORMATION,
+    STANDARD_RIGHTS_READ    | THREAD_GET_CONTEXT      | THREAD_QUERY_INFORMATION |
+    PSP_THREAD_QUERY_LIMITED_INFORMATION,
     STANDARD_RIGHTS_WRITE   | THREAD_TERMINATE        | THREAD_SUSPEND_RESUME    |
-    THREAD_ALERT            | THREAD_SET_INFORMATION  | THREAD_SET_CONTEXT,
+    THREAD_ALERT            | THREAD_SET_INFORMATION  | THREAD_SET_CONTEXT       |
+    PSP_THREAD_SET_LIMITED_INFORMATION,
     STANDARD_RIGHTS_EXECUTE | SYNCHRONIZE,
-    THREAD_ALL_ACCESS
+    THREAD_ALL_ACCESS | PSP_THREAD_SET_LIMITED_INFORMATION |
+    PSP_THREAD_QUERY_LIMITED_INFORMATION | PSP_THREAD_RESUME
 };
 
 PVOID PspSystemDllBase;
@@ -414,7 +424,7 @@ PspInitPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     RtlInitUnicodeString(&Name, L"Process");
     ObjectTypeInitializer.DefaultNonPagedPoolCharge = sizeof(EPROCESS);
     ObjectTypeInitializer.GenericMapping = PspProcessMapping;
-    ObjectTypeInitializer.ValidAccessMask = PROCESS_ALL_ACCESS;
+    ObjectTypeInitializer.ValidAccessMask = PspProcessMapping.GenericAll;
     ObjectTypeInitializer.DeleteProcedure = PspDeleteProcess;
     ObCreateObjectType(&Name, &ObjectTypeInitializer, NULL, &PsProcessType);
 
@@ -423,7 +433,7 @@ PspInitPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     ObjectTypeInitializer.Length = sizeof(ObjectTypeInitializer);
     ObjectTypeInitializer.DefaultNonPagedPoolCharge = sizeof(ETHREAD);
     ObjectTypeInitializer.GenericMapping = PspThreadMapping;
-    ObjectTypeInitializer.ValidAccessMask = THREAD_ALL_ACCESS;
+    ObjectTypeInitializer.ValidAccessMask = PspThreadMapping.GenericAll;
     ObjectTypeInitializer.DeleteProcedure = PspDeleteThread;
     ObCreateObjectType(&Name, &ObjectTypeInitializer, NULL, &PsThreadType);
 

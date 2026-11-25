@@ -1905,8 +1905,20 @@ MiQueryMemoryBasicInformation(IN HANDLE ProcessHandle,
         MemoryInfo.Type = MEM_MAPPED;
     }
 
+    /* Physical memory mapped by a driver (MmMapLockedPagesSpecifyCache to user mode): every page of the VAD is
+       mapped for its whole lifetime, so the VAD itself is the answer (MiQueryAddressState only knows normal VADs) */
+    if (Vad->u.VadFlags.VadType == VadDevicePhysicalMemory)
+    {
+        MemoryInfo.BaseAddress = PAGE_ALIGN(BaseAddress);
+        MemoryInfo.AllocationBase = (PVOID)(Vad->StartingVpn << PAGE_SHIFT);
+        MemoryInfo.AllocationProtect = MmProtectToValue[Vad->u.VadFlags.Protection];
+        MemoryInfo.Protect = MemoryInfo.AllocationProtect;
+        MemoryInfo.State = MEM_COMMIT;
+        MemoryInfo.Type = MEM_PRIVATE;
+        MemoryInfo.RegionSize = ((Vad->EndingVpn + 1) << PAGE_SHIFT) - (ULONG_PTR)MemoryInfo.BaseAddress;
+    }
     /* Check if this is a RosMM VAD */
-    if (MI_IS_ROSMM_VAD(Vad))
+    else if (MI_IS_ROSMM_VAD(Vad))
     {
         ASSERT(((PMEMORY_AREA)Vad)->Type == MEMORY_AREA_SECTION_VIEW);
         Status = MmQuerySectionView((PMEMORY_AREA)Vad, BaseAddress, &MemoryInfo, &ResultLength);
@@ -4771,7 +4783,9 @@ NtAllocateVirtualMemory(IN HANDLE ProcessHandle,
                                AllocationType);
         if (!NT_SUCCESS(Status))
         {
-            DPRINT1("Failed to insert the VAD!\n");
+            DPRINT1("Failed to insert the VAD! Status %lx, %s, base %p size %p alloc %lx highest %p\n",
+                    Status, PsGetCurrentProcess()->ImageFileName, (PVOID)StartingAddress, (PVOID)PRegionSize,
+                    AllocationType, (PVOID)HighestAddress);
             ExFreePoolWithTag(Vad, 'SdaV');
             goto FailPathNoLock;
         }

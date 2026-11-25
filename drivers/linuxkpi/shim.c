@@ -1,0 +1,899 @@
+/*
+ * PROJECT:     ReactOS Linux kernel module host (LinuxKPI)
+ * PURPOSE:     The Linux kernel API surface (first slice). Every function here follows the
+ *              System V ABI and Linux's LP64 types, because the module code does.
+ */
+
+#include "linuxkpi.h"
+#include <pseh/pseh2.h>
+#include <xmmintrin.h>
+
+typedef unsigned long long u64;
+typedef unsigned int u32;
+
+/* ---- printk ---------------------------------------------------------------------- */
+
+static int
+LkFormat(char *Out, int Max, const char *Fmt, const lx_ulong *Args, int NumArgs)
+{
+    int o = 0, ai = 0;
+    char tmp[24];
+
+#define PUT(c) do { if (o < Max - 1) Out[o++] = (c); } while (0)
+    while (*Fmt)
+    {
+        int longs = 0, zero = 0, width = 0;
+        lx_ulong v;
+        const char *s;
+        int n, base, neg;
+
+        if (*Fmt != '%') { PUT(*Fmt++); continue; }
+        Fmt++;
+        if (*Fmt == '0') { zero = 1; Fmt++; }
+        while (*Fmt >= '0' && *Fmt <= '9') width = width * 10 + (*Fmt++ - '0');
+        while (*Fmt == 'l' || *Fmt == 'z' || *Fmt == 't') { longs++; Fmt++; }
+        switch (*Fmt)
+        {
+            case '%': PUT('%'); Fmt++; continue;
+            case 'c': v = ai < NumArgs ? Args[ai++] : 0; PUT((char)v); Fmt++; continue;
+            case 's':
+                s = ai < NumArgs ? (const char *)(ULONG_PTR)Args[ai++] : "(null)";
+                if (!s) s = "(null)";
+                while (*s) PUT(*s++);
+                Fmt++;
+                continue;
+            case 'p':
+                v = ai < NumArgs ? Args[ai++] : 0;
+                PUT('0'); PUT('x'); base = 16; neg = 0; width = 16; zero = 1; longs = 2;
+                break;
+            case 'd': case 'i':
+                v = ai < NumArgs ? Args[ai++] : 0;
+                if (longs) neg = (lx_long)v < 0; else { neg = (int)v < 0; v = (lx_ulong)(lx_long)(int)v; }
+                if (neg) v = (lx_ulong)(-(lx_long)v);
+                base = 10;
+                break;
+            case 'u': v = ai < NumArgs ? Args[ai++] : 0; if (!longs) v &= 0xffffffff; base = 10; neg = 0; break;
+            case 'x': case 'X': v = ai < NumArgs ? Args[ai++] : 0; if (!longs) v &= 0xffffffff; base = 16; neg = 0; break;
+            default: PUT('%'); PUT(*Fmt ? *Fmt : '?'); if (*Fmt) Fmt++; continue;
+        }
+        Fmt++;
+        n = 0;
+        do { int d = (int)(v % base); tmp[n++] = (char)(d < 10 ? '0' + d : 'a' + d - 10); v /= base; } while (v);
+        if (neg) PUT('-');
+        while (n < width - neg) { PUT(zero ? '0' : ' '); width--; }
+        while (n) PUT(tmp[--n]);
+    }
+    Out[o] = 0;
+    return o;
+#undef PUT
+}
+
+int LX_ABI
+lx_printk(const char *Fmt, lx_ulong a1, lx_ulong a2, lx_ulong a3, lx_ulong a4, lx_ulong a5)
+{
+    char Buf[256];
+    lx_ulong Args[5] = { a1, a2, a3, a4, a5 };
+    int n;
+
+    if (Fmt[0] == '\001' && Fmt[1]) Fmt += 2;   /* KERN_<level> prefix */
+    n = LkFormat(Buf, sizeof(Buf), Fmt, Args, 5);
+    DbgPrint("LINUX: %s", Buf);
+    return n;
+}
+
+/* ---- bridge for the Linux-compiled core module (kpi.ko) ----------------------------------- */
+
+/*
+ * Allocator. Linux code allocates at any IRQL (GFP_ATOMIC under spinlocks); ReactOS's NonPagedPool cannot
+ * expand at DISPATCH_LEVEL, so small blocks come from a pre-allocated arena with per-size-class free lists.
+ * Every block has a 16-byte header: [0] requested size, [8] magic | class (0xFF = pool allocation).
+ */
+typedef struct _LKPI_BLOCK { lx_ulong Size; lx_ulong Tag; } LKPI_BLOCK;
+#define LKPI_BLOCK_MAGIC 0x4C4B504900000000ULL
+#define LKPI_BLOCK_FREE  0x100ULL       /* the block is on a free list: a second kfree() is a double free */
+#define LKPI_NUM_CLASSES 12            /* 32 .. 64 KiB payload */
+#define LKPI_ARENA_MB    48
+
+static PUCHAR LkpiArena, LkpiArenaPtr, LkpiArenaEnd;
+static LKPI_BLOCK *LkpiFree[LKPI_NUM_CLASSES];
+static KSPIN_LOCK LkpiAllocLock;
+
+/*
+ * The arena is used from interrupt handlers too (the NVMe completion frees its bookkeeping at DIRQL), so a thread
+ * holding the lock at DISPATCH_LEVEL could be interrupted by a handler on the same CPU that then spins on it forever
+ * (ReactOS bugchecks with SPIN_LOCK_ALREADY_OWNED). Interrupts are masked while the lock is held, like Linux's
+ * spin_lock_irqsave(). Callers already at DISPATCH_LEVEL or above must not raise the IRQL.
+ */
+typedef struct { ULONG_PTR Flags; KIRQL Irql; BOOLEAN Raised; } LKPI_ALLOC_LOCK_STATE;
+
+static VOID LkpiAllocLockAcquire(LKPI_ALLOC_LOCK_STATE *St)
+{
+    St->Flags = __readeflags();
+    _disable();
+    if (KeGetCurrentIrql() >= DISPATCH_LEVEL)
+    {
+        St->Raised = FALSE;
+        KeAcquireSpinLockAtDpcLevel(&LkpiAllocLock);
+    }
+    else
+    {
+        St->Raised = TRUE;
+        KeAcquireSpinLock(&LkpiAllocLock, &St->Irql);
+    }
+}
+
+static VOID LkpiAllocLockRelease(LKPI_ALLOC_LOCK_STATE *St)
+{
+    if (St->Raised)
+        KeReleaseSpinLock(&LkpiAllocLock, St->Irql);
+    else
+        KeReleaseSpinLockFromDpcLevel(&LkpiAllocLock);
+    if (St->Flags & 0x200)
+        _enable();
+}
+
+/* Debug aid: print the code addresses inside Linux modules found on the current stack (Linux code has no unwind
+ * data, so the nearest frames are guessed from the stack contents). Any IRQL. */
+static VOID LkpiDumpCallers(PCSTR Why)
+{
+    volatile ULONG_PTR Anchor = 0;
+    ULONG_PTR *Sp = (ULONG_PTR *)&Anchor;      /* scan upwards from this frame into the callers' frames */
+    ULONG i, n = 0;
+    char Sym[96];
+
+    for (i = 0; i < 160 && n < 8; i++)
+    {
+        if (LkpiSymbolize(Sp[i], Sym, sizeof(Sym)))
+        {
+            DbgPrint("LKPI:   %s %s\n", Why, Sym);
+            n++;
+        }
+    }
+}
+
+VOID LkpiInitAllocator(VOID)
+{
+    SIZE_T Size = (SIZE_T)LKPI_ARENA_MB << 20;
+
+    KeInitializeSpinLock(&LkpiAllocLock);
+    while (!LkpiArena && Size >= (4 << 20))
+    {
+        LkpiArena = ExAllocatePoolWithTag(NonPagedPool, Size, LKPI_TAG);
+        if (!LkpiArena) Size >>= 1;
+    }
+    LkpiArenaPtr = LkpiArena;
+    LkpiArenaEnd = LkpiArena ? LkpiArena + Size : NULL;
+    DbgPrint("LKPI: allocator arena %lu KiB at %p\n", (ULONG)(Size >> 10), LkpiArena);
+}
+
+static ULONG LkpiClassOf(lx_ulong Size, lx_ulong *Payload)
+{
+    ULONG c = 0;
+    lx_ulong p = 32;
+
+    while (p < Size && c < LKPI_NUM_CLASSES) { p <<= 1; c++; }
+    *Payload = p;
+    return c;
+}
+
+void * LX_ABI nt_alloc(lx_ulong Size, int Zero)
+{
+    LKPI_BLOCK *b = NULL;
+    lx_ulong Payload;
+    ULONG c = LkpiClassOf(Size ? Size : 1, &Payload);
+    LKPI_ALLOC_LOCK_STATE Old;
+
+    if (c < LKPI_NUM_CLASSES)
+    {
+        LkpiAllocLockAcquire(&Old);
+        if (LkpiFree[c])
+        {
+            LKPI_BLOCK *Next;
+
+            b = LkpiFree[c];
+            Next = *(LKPI_BLOCK **)(b + 1);
+            /* a free block must still say so, and its link must point into the arena: otherwise something wrote to
+             * freed memory. Drop the list (leaking it) rather than hand out a wild pointer. */
+            if (b->Tag != (LKPI_BLOCK_MAGIC | LKPI_BLOCK_FREE | c) ||
+                (Next && ((PUCHAR)Next < LkpiArena || (PUCHAR)Next >= LkpiArenaEnd)))
+            {
+                LkpiAllocLockRelease(&Old);
+                DbgPrint("LKPI: heap corruption: free block %p (class %lu) tag %I64x link %p: use after free\n",
+                         b, c, (ULONG64)b->Tag, Next);
+                LkpiDumpCallers("corrupt block found by");
+                LkpiAllocLockAcquire(&Old);
+                LkpiFree[c] = NULL;
+                b = NULL;
+            }
+            else
+            {
+                LkpiFree[c] = Next;
+            }
+        }
+        if (!b && LkpiArenaPtr && LkpiArenaPtr + sizeof(LKPI_BLOCK) + Payload <= LkpiArenaEnd)
+        {
+            b = (LKPI_BLOCK *)LkpiArenaPtr;
+            LkpiArenaPtr += sizeof(LKPI_BLOCK) + Payload;
+        }
+        LkpiAllocLockRelease(&Old);
+        if (b) b->Tag = LKPI_BLOCK_MAGIC | c;
+    }
+    if (!b)
+    {
+        /* large or arena exhausted: general pool (only valid at <= DISPATCH, and may fail when expanding there) */
+        if (KeGetCurrentIrql() > APC_LEVEL)
+            DbgPrint("LKPI: pool allocation of %lu bytes at IRQL %u (arena %s)\n", (ULONG)Size, (unsigned)KeGetCurrentIrql(), LkpiArena ? "exhausted/too small" : "missing");
+        b = ExAllocatePoolWithTag(NonPagedPool, (SIZE_T)Size + sizeof(LKPI_BLOCK), LKPI_TAG);
+        if (!b) return NULL;
+        b->Tag = LKPI_BLOCK_MAGIC | 0xFF;
+    }
+    b->Size = Size;
+    if (Zero) RtlZeroMemory(b + 1, (SIZE_T)Size);
+    return b + 1;
+}
+
+void LX_ABI nt_free(void *p)
+{
+    LKPI_BLOCK *b;
+    LKPI_ALLOC_LOCK_STATE Old;
+    ULONG c;
+
+    if (!p) return;
+    b = (LKPI_BLOCK *)p - 1;
+    if ((b->Tag & 0xFFFFFFFF00000000ULL) != LKPI_BLOCK_MAGIC)
+    {
+        DbgPrint("LKPI: kfree of a pointer not from nt_alloc: %p\n", p);
+        return;
+    }
+    c = (ULONG)(b->Tag & 0xFF);
+    if (c == 0xFF)
+    {
+        b->Tag = 0;
+        ExFreePoolWithTag(b, LKPI_TAG);
+        return;
+    }
+    LkpiAllocLockAcquire(&Old);
+    if (b->Tag & LKPI_BLOCK_FREE)
+    {
+        LkpiAllocLockRelease(&Old);
+        DbgPrint("LKPI: double free of %p (%I64u bytes)\n", p, (ULONG64)b->Size);
+        LkpiDumpCallers("double free by");
+        return;                     /* keep the free list intact */
+    }
+    b->Tag |= LKPI_BLOCK_FREE;
+    *(LKPI_BLOCK **)(b + 1) = LkpiFree[c];
+    LkpiFree[c] = b;
+    LkpiAllocLockRelease(&Old);
+}
+
+lx_ulong LX_ABI nt_alloc_size(void *p)
+{
+    LKPI_BLOCK * b;
+    if (!p) return 0;
+    b = (LKPI_BLOCK *)p - 1;
+    return (b->Tag & 0xFFFFFFFF00000000ULL) == LKPI_BLOCK_MAGIC ? b->Size : 0;
+}
+
+/* Kernel threads for workqueues and timers: fn(arg) runs on a system thread until it returns. */
+typedef struct _LKPI_THREAD_START { void (LX_ABI *Fn)(void *); void *Arg; } LKPI_THREAD_START;
+
+static VOID NTAPI LkpiThreadMain(PVOID Ctx)
+{
+    LKPI_THREAD_START Start = *(LKPI_THREAD_START *)Ctx;
+    ExFreePoolWithTag(Ctx, LKPI_TAG);
+    Start.Fn(Start.Arg);
+    PsTerminateSystemThread(STATUS_SUCCESS);
+}
+
+int LX_ABI nt_thread_spawn(void (LX_ABI *Fn)(void *), void *Arg)
+{
+    HANDLE Th;
+    NTSTATUS Status;
+    LKPI_THREAD_START *Start = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Start), LKPI_TAG);
+
+    if (!Start) return -1;
+    Start->Fn = Fn;
+    Start->Arg = Arg;
+    Status = PsCreateSystemThread(&Th, THREAD_ALL_ACCESS, NULL, NULL, NULL, LkpiThreadMain, Start);
+    if (!NT_SUCCESS(Status))
+    {
+        ExFreePoolWithTag(Start, LKPI_TAG);
+        return -1;
+    }
+    ZwClose(Th);
+    return 0;
+}
+
+
+#define LKPI_CHECK_IRQL(fn) do { if (KeGetCurrentIrql() > APC_LEVEL) DbgPrint("LKPI: " fn " called at IRQL %u\n", (unsigned)KeGetCurrentIrql()); } while (0)
+
+/* ---- memory bridge for the Linux page layer (kpi2_mm.c) ---------------------------------------- */
+
+/* One physically contiguous region that backs all Linux "system memory" (alloc_pages, dma_alloc_*).
+ * Linux's direct map then is simply va = pa + (va0 - pa0). Returns the kernel VA, fills *Phys. */
+void * LX_ABI nt_contig_alloc(lx_ulong Size, lx_ulong *Phys)
+{
+    LKPI_CHECK_IRQL("nt_contig_alloc");
+    PHYSICAL_ADDRESS Low, High, Bound, Pa;
+    PVOID Va;
+
+    Low.QuadPart = 0; High.QuadPart = 0xFFFFFFFFFFFFULL; Bound.QuadPart = 0;
+    Va = MmAllocateContiguousMemorySpecifyCache((SIZE_T)Size, Low, High, Bound, MmCached);
+    if (!Va) return NULL;
+    Pa = MmGetPhysicalAddress(Va);
+    *Phys = (lx_ulong)Pa.QuadPart;
+    RtlZeroMemory(Va, (SIZE_T)Size);
+    return Va;
+}
+
+void LX_ABI nt_contig_free(void *Va, lx_ulong Size)
+{
+    MmFreeContiguousMemory(Va);
+}
+
+void * LX_ABI nt_ioremap(lx_ulong Phys, lx_ulong Size, int Cache)
+{
+    LKPI_CHECK_IRQL("nt_ioremap");
+    PHYSICAL_ADDRESS Pa;
+    Pa.QuadPart = (LONGLONG)Phys;
+    return MmMapIoSpace(Pa, (SIZE_T)Size, Cache == 2 ? MmWriteCombined : (Cache == 1 ? MmCached : MmNonCached));
+}
+
+void LX_ABI nt_iounmap(void *Va, lx_ulong Size) { MmUnmapIoSpace(Va, (SIZE_T)Size); }
+
+/* Map an arbitrary list of physical page frames into one contiguous kernel VA range (vmap). */
+void * LX_ABI nt_map_pfns(const lx_ulong *Pfns, ULONG Count, int Cache, void **MdlOut)
+{
+    LKPI_CHECK_IRQL("nt_map_pfns");
+    PMDL Mdl = IoAllocateMdl(NULL, Count * PAGE_SIZE, FALSE, FALSE, NULL);
+    PPFN_NUMBER Arr;
+    PVOID Va;
+    ULONG i;
+
+    if (!Mdl) return NULL;
+    Mdl->MdlFlags |= MDL_PAGES_LOCKED | MDL_PAGES_LOCKED;
+    Mdl->ByteCount = Count * PAGE_SIZE;
+    Mdl->ByteOffset = 0;
+    Arr = MmGetMdlPfnArray(Mdl);
+    for (i = 0; i < Count; i++) Arr[i] = (PFN_NUMBER)Pfns[i];
+    Va = MmMapLockedPagesSpecifyCache(Mdl, KernelMode, Cache == 2 ? MmWriteCombined : MmCached, NULL, FALSE, NormalPagePriority);
+    if (!Va) { IoFreeMdl(Mdl); return NULL; }
+    *MdlOut = Mdl;
+    return Va;
+}
+
+void LX_ABI nt_unmap_pfns(void *Va, void *MdlPtr)
+{
+    PMDL Mdl = MdlPtr;
+    if (!Mdl) return;
+    MmUnmapLockedPages(Va, Mdl);
+    IoFreeMdl(Mdl);
+}
+
+lx_ulong LX_ABI nt_virt_to_phys(void *Va)
+{
+    LKPI_CHECK_IRQL("nt_virt_to_phys");
+    /* MmGetPhysicalAddress bugchecks (while dumping its stack) on an unmapped address: check first */
+    if (!MmIsAddressValid(Va))
+    {
+        DbgPrint("LKPI: nt_virt_to_phys: %p is not a valid address\n", Va);
+        return 0;
+    }
+    return (lx_ulong)MmGetPhysicalAddress(Va).QuadPart;
+}
+
+
+/* ---- PCI configuration space through the HAL (bus numbers/devfn as Linux sees them) ---------- */
+
+int LX_ABI nt_pci_cfg_read(unsigned int Bus, unsigned int DevFn, unsigned int Off, unsigned int Len, unsigned int *Val)
+{
+    PCI_SLOT_NUMBER Slot;
+    ULONG Got;
+
+    Slot.u.AsULONG = 0;
+    Slot.u.bits.DeviceNumber = DevFn >> 3;
+    Slot.u.bits.FunctionNumber = DevFn & 7;
+    *Val = 0;
+    Got = HalGetBusDataByOffset(PCIConfiguration, Bus, Slot.u.AsULONG, Val, Off, Len);
+    return Got == Len ? 0 : -1;
+}
+
+int LX_ABI nt_pci_cfg_write(unsigned int Bus, unsigned int DevFn, unsigned int Off, unsigned int Len, unsigned int Val)
+{
+    PCI_SLOT_NUMBER Slot;
+    ULONG Got;
+
+    Slot.u.AsULONG = 0;
+    Slot.u.bits.DeviceNumber = DevFn >> 3;
+    Slot.u.bits.FunctionNumber = DevFn & 7;
+    Got = HalSetBusDataByOffset(PCIConfiguration, Bus, Slot.u.AsULONG, &Val, Off, Len);
+    return Got == Len ? 0 : -1;
+}
+
+
+/* ---- interrupts (legacy line through the HAL) and firmware files ----------------------------------- */
+
+typedef struct _LKPI_IRQ
+{
+    PKINTERRUPT Obj;
+    int Irq;
+    void *Dev;
+    int (LX_ABI *Handler)(int, void *);
+    int (LX_ABI *Thread)(int, void *);
+    KDPC Dpc;
+    BOOLEAN ThreadPending;
+} LKPI_IRQ;
+
+static VOID NTAPI LkpiIrqDpc(PKDPC Dpc, PVOID Ctx, PVOID A1, PVOID A2)
+{
+    LKPI_IRQ *Q = Ctx;
+    BOOLEAN Pending = Q->ThreadPending;
+
+    Q->ThreadPending = FALSE;
+    if (Pending && Q->Thread) Q->Thread(Q->Irq, Q->Dev);
+}
+
+static BOOLEAN NTAPI LkpiIsr(PKINTERRUPT Interrupt, PVOID Ctx)
+{
+    LKPI_IRQ *Q = Ctx;
+    int R = Q->Handler(Q->Irq, Q->Dev);       /* IRQ_NONE 0, IRQ_HANDLED 1, IRQ_WAKE_THREAD 2 */
+
+    if (R == 2 && Q->Thread)
+    {
+        Q->ThreadPending = TRUE;
+        KeInsertQueueDpc(&Q->Dpc, NULL, NULL);
+    }
+    return R != 0;
+}
+
+/* Message-signaled interrupts. Linux irq numbers >= LKPI_MSI_IRQ_BASE name an MSI vector slot; the APIC HAL
+ * (hal/halx86/apic/apic.c) maps slot n to a free IDT vector via the synthetic "bus level" HALP_MSI_IRQ_BASE + n. */
+#define LKPI_MSI_IRQ_BASE 0x1000
+#define LKPI_MSI_HAL_BASE 0xC0
+#define LKPI_MSI_SLOTS 60
+static LONG LkpiMsiNext;
+
+/* Allocate a slot and return the message the device must send: *Addr (0xFEExxxxx) and *Data (the vector). */
+int LX_ABI nt_msi_alloc(unsigned long long *Addr, unsigned int *Data)
+{
+    LONG Slot = InterlockedIncrement(&LkpiMsiNext) - 1;
+    ULONG Vector, Apic;
+    KIRQL Irql;
+    KAFFINITY Affinity;
+    int Cpuid[4];
+
+    if (Slot >= LKPI_MSI_SLOTS) return -1;
+    Vector = HalGetInterruptVector(Internal, 0, LKPI_MSI_HAL_BASE + Slot, LKPI_MSI_HAL_BASE + Slot, &Irql, &Affinity);
+    if (!Vector) return -1;
+    /* the interrupt is connected on the boot CPU (Affinity), so aim the message at that CPU's APIC id */
+    KeSetSystemAffinityThread(1);
+    __cpuid(Cpuid, 1);
+    KeRevertToUserAffinityThread();
+    Apic = ((ULONG)Cpuid[1] >> 24) & 0xFF;
+    *Addr = 0xFEE00000ULL | ((ULONGLONG)Apic << 12);
+    *Data = Vector;                       /* fixed delivery, edge, assert */
+    return LKPI_MSI_IRQ_BASE + Slot;
+}
+
+void * LX_ABI nt_irq_connect(int Irq, int (LX_ABI *Handler)(int, void *), int (LX_ABI *Thread)(int, void *), void *Dev, int Shared)
+{
+    LKPI_IRQ *Q = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Q), LKPI_TAG);
+    ULONG Vector;
+    KIRQL Irql;
+    KAFFINITY Affinity;
+    NTSTATUS Status;
+
+    if (!Q) return NULL;
+    RtlZeroMemory(Q, sizeof(*Q));
+    Q->Irq = Irq; Q->Dev = Dev; Q->Handler = Handler; Q->Thread = Thread;
+    KeInitializeDpc(&Q->Dpc, LkpiIrqDpc, Q);
+    if (Irq >= LKPI_MSI_IRQ_BASE)
+    {
+        ULONG Level = LKPI_MSI_HAL_BASE + (Irq - LKPI_MSI_IRQ_BASE);
+        Vector = HalGetInterruptVector(Internal, 0, Level, Level, &Irql, &Affinity);
+        if (Vector)
+        {
+            Status = IoConnectInterrupt(&Q->Obj, LkpiIsr, Q, NULL, Vector, Irql, Irql, Latched, FALSE, Affinity, FALSE);
+            if (!NT_SUCCESS(Status)) { DbgPrint("LKPI: MSI IoConnectInterrupt failed %08lx\n", Status); ExFreePoolWithTag(Q, LKPI_TAG); return NULL; }
+            DbgPrint("LKPI: MSI slot %d connected (vector %lu, irql %u)\n", Irq - LKPI_MSI_IRQ_BASE, Vector, (unsigned)Irql);
+            return Q;
+        }
+        ExFreePoolWithTag(Q, LKPI_TAG);
+        return NULL;
+    }
+    Vector = HalGetInterruptVector(PCIBus, 0, (ULONG)Irq, (ULONG)Irq, &Irql, &Affinity);
+    if (!Vector)
+    {
+        DbgPrint("LKPI: no interrupt vector for line %d\n", Irq);
+        ExFreePoolWithTag(Q, LKPI_TAG);
+        return NULL;
+    }
+    Status = IoConnectInterrupt(&Q->Obj, LkpiIsr, Q, NULL, Vector, Irql, Irql, LevelSensitive, Shared ? TRUE : FALSE, Affinity, FALSE);
+    if (!NT_SUCCESS(Status))
+    {
+        DbgPrint("LKPI: IoConnectInterrupt failed %08lx\n", Status);
+        ExFreePoolWithTag(Q, LKPI_TAG);
+        return NULL;
+    }
+    DbgPrint("LKPI: interrupt line %d connected (vector %lu, irql %u)\n", Irq, Vector, (unsigned)Irql);
+    return Q;
+}
+
+void LX_ABI nt_irq_disconnect(void *Handle)
+{
+    LKPI_IRQ *Q = Handle;
+    if (!Q) return;
+    IoDisconnectInterrupt(Q->Obj);
+    KeRemoveQueueDpc(&Q->Dpc);
+    ExFreePoolWithTag(Q, LKPI_TAG);
+}
+
+/* Reads \SystemRoot\system32\firmware\<name> (name uses '/' separators) into an nt_alloc'd buffer. */
+void * LX_ABI nt_read_firmware(const char *Name, lx_ulong *Size)
+{
+    WCHAR Path[260];
+    UNICODE_STRING Us;
+    OBJECT_ATTRIBUTES Oa;
+    IO_STATUS_BLOCK Iosb;
+    FILE_STANDARD_INFORMATION Info;
+    HANDLE File;
+    PVOID Buf = NULL;
+    NTSTATUS Status;
+    ULONG i, n;
+
+    static const WCHAR Prefix[] = L"\\SystemRoot\\system32\\firmware\\";
+
+    RtlCopyMemory(Path, Prefix, sizeof(Prefix));
+    n = RTL_NUMBER_OF(Prefix) - 1;
+    for (i = 0; Name[i] && n < RTL_NUMBER_OF(Path) - 1; i++) Path[n++] = Name[i] == '/' ? L'\\' : (WCHAR)Name[i];
+    Path[n] = 0;
+    RtlInitUnicodeString(&Us, Path);
+    InitializeObjectAttributes(&Oa, &Us, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+    Status = ZwCreateFile(&File, GENERIC_READ | SYNCHRONIZE, &Oa, &Iosb, NULL, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_OPEN,
+                          FILE_SYNCHRONOUS_IO_NONALERT | FILE_NON_DIRECTORY_FILE, NULL, 0);
+    if (!NT_SUCCESS(Status)) { DbgPrint("LKPI: firmware %s not found (%08lx)\n", Name, Status); return NULL; }
+    Status = ZwQueryInformationFile(File, &Iosb, &Info, sizeof(Info), FileStandardInformation);
+    if (NT_SUCCESS(Status) && Info.EndOfFile.QuadPart > 0 && Info.EndOfFile.QuadPart < 0x10000000)
+    {
+        Buf = nt_alloc((lx_ulong)Info.EndOfFile.QuadPart, 0);
+        if (Buf && NT_SUCCESS(ZwReadFile(File, NULL, NULL, NULL, &Iosb, Buf, (ULONG)Info.EndOfFile.QuadPart, NULL, NULL)))
+            *Size = (lx_ulong)Info.EndOfFile.QuadPart;
+        else { nt_free(Buf); Buf = NULL; }
+    }
+    ZwClose(File);
+    return Buf;
+}
+
+unsigned long long LX_ABI nt_ktime_ns(void)
+{
+    return KeQueryInterruptTime() * 100ULL;
+}
+
+lx_ulong LX_ABI nt_current_tid(void) { return (lx_ulong)PsGetCurrentThreadId(); }
+
+unsigned char LX_ABI nt_raise_dispatch(void)
+{
+    KIRQL Old = KeGetCurrentIrql();
+    if (Old < DISPATCH_LEVEL) KeRaiseIrql(DISPATCH_LEVEL, &Old);
+    return (unsigned char)Old;
+}
+
+void LX_ABI nt_lower_irql(unsigned char Old)
+{
+    if (KeGetCurrentIrql() > (KIRQL)Old) KeLowerIrql((KIRQL)Old);
+}
+
+/*
+ * Linux kernel_fpu_begin()/kernel_fpu_end() for SSE code in Linux modules (amdgpu's display core computes bandwidth
+ * and clocks in double precision). On x64 NT keeps a kernel thread's SSE registers across interrupts (volatile ones
+ * in the trap frame) and thread switches (non-volatile ones in the switch frame), as Windows does, so what remains
+ * is what Linux also does: no thread switch inside the section (Linux disables preemption; here DISPATCH_LEVEL, so
+ * the thread also stays on this CPU) and the default MXCSR (a user thread's MXCSR may unmask exceptions or set
+ * flush-to-zero). Sections nest per CPU. x87 is not supported (the modules' FP code is SSE only; checked at build).
+ */
+typedef struct _LKPI_FPU_CPU
+{
+    ULONG Depth;
+    ULONG Mxcsr;
+    KIRQL Irql;
+} LKPI_FPU_CPU;
+
+static LKPI_FPU_CPU LkpiFpuCpu[MAXIMUM_PROCESSORS];
+
+void LX_ABI nt_fpu_begin(void)
+{
+    KIRQL Old = KeGetCurrentIrql();
+    LKPI_FPU_CPU *C;
+
+    if (Old < DISPATCH_LEVEL)
+        KeRaiseIrql(DISPATCH_LEVEL, &Old);
+    C = &LkpiFpuCpu[KeGetCurrentProcessorNumber() % MAXIMUM_PROCESSORS];
+    if (C->Depth++ == 0)
+    {
+        C->Irql = Old;
+        C->Mxcsr = _mm_getcsr();
+        _mm_setcsr(0x1F80);         /* all exceptions masked, round to nearest, no FTZ/DAZ */
+    }
+    else if (Old < DISPATCH_LEVEL)
+    {
+        /* cannot happen: a nested begin finds the IRQL raised by the outer one */
+        KeLowerIrql(Old);
+    }
+}
+
+void LX_ABI nt_fpu_end(void)
+{
+    LKPI_FPU_CPU *C = &LkpiFpuCpu[KeGetCurrentProcessorNumber() % MAXIMUM_PROCESSORS];
+
+    if (!C->Depth)
+    {
+        DbgPrint("LKPI: kernel_fpu_end without kernel_fpu_begin\n");
+        return;
+    }
+    if (--C->Depth == 0)
+    {
+        _mm_setcsr(C->Mxcsr);
+        if (C->Irql < DISPATCH_LEVEL)
+            KeLowerIrql(C->Irql);
+    }
+}
+
+void LX_ABI nt_sleep_ms(unsigned int Ms)
+{
+    LARGE_INTEGER Interval;
+
+    if (KeGetCurrentIrql() >= DISPATCH_LEVEL)
+    {
+        KeStallExecutionProcessor(Ms ? Ms * 1000 : 10);
+        return;
+    }
+    Interval.QuadPart = Ms ? -(LONGLONG)Ms * 10000 : -1000;   /* 0 = ~100 us */
+    KeDelayExecutionThread(KernelMode, FALSE, &Interval);
+}
+
+void LX_ABI nt_stall_us(unsigned int Us) { KeStallExecutionProcessor(Us); }
+
+unsigned long long LX_ABI nt_time_ms(void)
+{
+    LARGE_INTEGER Now;
+    KeQueryTickCount(&Now);
+    return (unsigned long long)Now.QuadPart * KeQueryTimeIncrement() / 10000;
+}
+
+void LX_ABI nt_dbgprint(const char *s) { DbgPrint("LINUX: %s", s); }
+/* debug aid: print a code address symbolically ("name+off") with a tag */
+void LX_ABI nt_log_addr(const char *tag, void *addr)
+{
+    char Sym[96];
+    if (!LkpiSymbolize((ULONG64)(ULONG_PTR)addr, Sym, sizeof(Sym))) Sym[0] = 0;
+    DbgPrint("LKPI: %s %p %s\n", tag, addr, Sym);
+}
+
+/* ---- user memory (copy_from_user, copy_to_user, get_user, put_user) ------------------------------- */
+/*
+ * Linux "user pointers" reach the modules in two forms: the ioctl argument, which the host has already captured into a
+ * kernel buffer and registers here for the calling thread, and pointers nested inside that argument, which point into
+ * the calling process. Anything else is refused (Linux sees -EFAULT): a user-space range is probed and accessed under
+ * SEH, a kernel address is accepted only inside the current thread's registered argument.
+ */
+typedef struct _LKPI_USER_ARG
+{
+    PKTHREAD Thread;
+    PUCHAR Base;
+    SIZE_T Size;
+} LKPI_USER_ARG, *PLKPI_USER_ARG;
+static LKPI_USER_ARG LkpiUserArgs[32];
+
+static PLKPI_USER_ARG LkpiFindUserArg(VOID)
+{
+    PKTHREAD Self = KeGetCurrentThread();
+    ULONG i;
+
+    for (i = 0; i < RTL_NUMBER_OF(LkpiUserArgs); i++)
+        if (LkpiUserArgs[i].Thread == Self)
+            return &LkpiUserArgs[i];
+    return NULL;
+}
+
+BOOLEAN LkpiUserArgEnter(PVOID Base, SIZE_T Size)
+{
+    ULONG i;
+
+    ASSERT(!LkpiFindUserArg());
+    for (i = 0; i < RTL_NUMBER_OF(LkpiUserArgs); i++)
+    {
+        if (!InterlockedCompareExchangePointer((PVOID *)&LkpiUserArgs[i].Thread, KeGetCurrentThread(), NULL))
+        {
+            /* only this thread looks at its own slot, so the fields can follow the claim */
+            LkpiUserArgs[i].Base = Base;
+            LkpiUserArgs[i].Size = Size;
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+VOID LkpiUserArgLeave(VOID)
+{
+    PLKPI_USER_ARG Arg = LkpiFindUserArg();
+
+    if (!Arg) return;
+    Arg->Base = NULL;
+    Arg->Size = 0;
+    InterlockedExchangePointer((PVOID *)&Arg->Thread, NULL);
+}
+
+/* Probes and copies under SEH. A separate Windows-ABI function: GCC emits no SEH unwind data for sysv_abi functions. */
+static DECLSPEC_NOINLINE BOOLEAN
+LkpiCopyUserProtected(PVOID Dst, const VOID *Src, SIZE_T Len, PVOID User, BOOLEAN ToUser)
+{
+    BOOLEAN Ok = FALSE;
+
+    _SEH2_TRY
+    {
+        if (ToUser)
+            ProbeForWrite(User, Len, 1);
+        else
+            ProbeForRead(User, Len, 1);
+        RtlCopyMemory(Dst, Src, Len);
+        Ok = TRUE;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Ok = FALSE;
+    }
+    _SEH2_END;
+    return Ok;
+}
+
+/* Copies Len bytes between kernel memory and a Linux user pointer (Dst if ToUser, else Src). Returns the number of bytes
+ * not copied: 0 or Len. */
+unsigned long LX_ABI nt_copy_user(void *Dst, const void *Src, unsigned long Len, int ToUser)
+{
+    PUCHAR User = ToUser ? (PUCHAR)Dst : (PUCHAR)Src;
+    PLKPI_USER_ARG Arg;
+
+    if (!Len)
+        return 0;
+    Arg = LkpiFindUserArg();
+    if (Arg)
+    {
+        if (User >= Arg->Base && Len <= Arg->Size && (SIZE_T)(User - Arg->Base) <= Arg->Size - Len)
+        {
+            RtlCopyMemory(Dst, Src, Len);
+            return 0;
+        }
+        /* otherwise only memory of the calling process, from a context that may take page faults */
+        if ((ULONG_PTR)User < (ULONG_PTR)MmUserProbeAddress && KeGetCurrentIrql() <= APC_LEVEL &&
+            LkpiCopyUserProtected(Dst, Src, Len, User, ToUser != 0))
+            return 0;
+    }
+    DbgPrint("LKPI: refused %s user pointer %p (%lu bytes)\n", ToUser ? "write to" : "read from", User, Len);
+    return Len;
+}
+
+static void (LX_ABI *LkpiTickFn)(void);
+static KTIMER LkpiTickTimer;
+static KDPC LkpiTickDpc;
+
+static VOID NTAPI LkpiTickDpcRoutine(PKDPC Dpc, PVOID Ctx, PVOID Arg1, PVOID Arg2)
+{
+    if (LkpiTickFn) LkpiTickFn();
+}
+
+/* ---- DPCs for Linux code that runs in softirq context (NAPI polls) ------------------------------------------ */
+typedef struct _LKPI_DPC
+{
+    KDPC Dpc;
+    void (LX_ABI *Fn)(void *);
+    void *Ctx;
+} LKPI_DPC, *PLKPI_DPC;
+
+static VOID NTAPI LkpiDpcRoutine(PKDPC Dpc, PVOID Ctx, PVOID A1, PVOID A2)
+{
+    PLKPI_DPC D = Ctx;
+
+    D->Fn(D->Ctx);
+}
+
+void * LX_ABI nt_dpc_alloc(void (LX_ABI *Fn)(void *), void *Ctx)
+{
+    PLKPI_DPC D = ExAllocatePoolWithTag(NonPagedPool, sizeof(*D), LKPI_TAG);
+
+    if (!D) return NULL;
+    D->Fn = Fn;
+    D->Ctx = Ctx;
+    KeInitializeDpc(&D->Dpc, LkpiDpcRoutine, D);
+    return D;
+}
+
+/* Any IRQL (also from an ISR). Returns 1 if queued, 0 if it already was. */
+int LX_ABI nt_dpc_queue(void *Handle)
+{
+    return Handle && KeInsertQueueDpc(&((PLKPI_DPC)Handle)->Dpc, NULL, NULL) ? 1 : 0;
+}
+
+/* An ACPI table (4-character signature) from the HAL's cache, PASSIVE_LEVEL; NULL if absent. Not to be freed. */
+void * LX_ABI nt_acpi_get_table(const char *Sig)
+{
+    ULONG Signature;
+
+    if (!HalGetCachedAcpiTable || KeGetCurrentIrql() > APC_LEVEL)
+        return NULL;
+    RtlCopyMemory(&Signature, Sig, sizeof(Signature));
+    return HalGetCachedAcpiTable(Signature, NULL, NULL);
+}
+
+/* Wall clock in nanoseconds since 1970 */
+unsigned long long LX_ABI nt_real_ns(void)
+{
+    LARGE_INTEGER Now;
+
+    KeQuerySystemTime(&Now);
+    return (unsigned long long)(Now.QuadPart - 116444736000000000LL) * 100;
+}
+
+void LX_ABI nt_register_tick(void (LX_ABI *Fn)(void))
+{
+    LARGE_INTEGER Due;
+
+    LkpiTickFn = Fn;
+    KeInitializeTimerEx(&LkpiTickTimer, SynchronizationTimer);
+    KeInitializeDpc(&LkpiTickDpc, LkpiTickDpcRoutine, NULL);
+    Due.QuadPart = -10000;   /* 1 ms */
+    KeSetTimerEx(&LkpiTickTimer, Due, 1, &LkpiTickDpc);
+}
+
+/* ---- called when a module calls a Linux function that is not implemented yet ---------------- */
+void * LX_ABI LkpiMissing(const char *Name)
+{
+    DbgPrint("LKPI: call to unimplemented Linux function '%s'\n", Name);
+    return NULL;
+}
+
+/* ---- export table ----------------------------------------------------------------- */
+
+const LKPI_EXPORT LkpiExports[] =
+{
+    { "nt_alloc", (PVOID)nt_alloc },
+    { "nt_free", (PVOID)nt_free },
+    { "nt_alloc_size", (PVOID)nt_alloc_size },
+    { "nt_thread_spawn", (PVOID)nt_thread_spawn },
+    { "nt_ktime_ns", (PVOID)nt_ktime_ns },
+    { "nt_contig_alloc", (PVOID)nt_contig_alloc },
+    { "nt_contig_free", (PVOID)nt_contig_free },
+    { "nt_ioremap", (PVOID)nt_ioremap },
+    { "nt_iounmap", (PVOID)nt_iounmap },
+    { "nt_map_pfns", (PVOID)nt_map_pfns },
+    { "nt_unmap_pfns", (PVOID)nt_unmap_pfns },
+    { "nt_virt_to_phys", (PVOID)nt_virt_to_phys },
+    { "nt_pci_cfg_read", (PVOID)nt_pci_cfg_read },
+    { "nt_pci_cfg_write", (PVOID)nt_pci_cfg_write },
+    { "nt_irq_connect", (PVOID)nt_irq_connect },
+    { "nt_msi_alloc", (PVOID)nt_msi_alloc },
+    { "nt_irq_disconnect", (PVOID)nt_irq_disconnect },
+    { "nt_dpc_alloc", (PVOID)nt_dpc_alloc },
+    { "nt_dpc_queue", (PVOID)nt_dpc_queue },
+    { "nt_real_ns", (PVOID)nt_real_ns },
+    { "nt_acpi_get_table", (PVOID)nt_acpi_get_table },
+    { "nt_read_firmware", (PVOID)nt_read_firmware },
+    { "nt_current_tid", (PVOID)nt_current_tid },
+    { "nt_raise_dispatch", (PVOID)nt_raise_dispatch },
+    { "nt_fpu_begin", (PVOID)nt_fpu_begin },
+    { "nt_fd_reserve", (PVOID)nt_fd_reserve },
+    { "nt_fd_unreserve", (PVOID)nt_fd_unreserve },
+    { "nt_fd_install", (PVOID)nt_fd_install },
+    { "nt_fd_get", (PVOID)nt_fd_get },
+    { "nt_fpu_end", (PVOID)nt_fpu_end },
+    { "nt_lower_irql", (PVOID)nt_lower_irql },
+    { "nt_sleep_ms", (PVOID)nt_sleep_ms },
+    { "nt_stall_us", (PVOID)nt_stall_us },
+    { "nt_time_ms", (PVOID)nt_time_ms },
+    { "nt_dbgprint", (PVOID)nt_dbgprint },
+    { "nt_log_addr", (PVOID)nt_log_addr },
+    { "nt_copy_user", (PVOID)nt_copy_user },
+    { "nt_input_event", (PVOID)nt_input_event },
+    { "nt_register_tick", (PVOID)nt_register_tick },
+};
+
+const ULONG LkpiExportCount = RTL_NUMBER_OF(LkpiExports);

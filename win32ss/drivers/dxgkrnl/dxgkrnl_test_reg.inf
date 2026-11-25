@@ -1,0 +1,9 @@
+; Test binding of a WDDM miniport (viogpudo) to virtio-gpu through the critical device database
+[AddReg]
+HKLM,"SYSTEM\CurrentControlSet\Services\viogpudo","ErrorControl",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\viogpudo","Group",0x00000000,"Video"
+HKLM,"SYSTEM\CurrentControlSet\Services\viogpudo","ImagePath",0x00020000,"system32\drivers\viogpudo.sys"
+HKLM,"SYSTEM\CurrentControlSet\Services\viogpudo","Start",0x00010001,0x00000003
+HKLM,"SYSTEM\CurrentControlSet\Services\viogpudo","Type",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#VEN_1AF4&DEV_1050","Service",0x00000000,"viogpudo"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#VEN_1AF4&DEV_1050","ClassGUID",0x00000000,"{4D36E968-E325-11CE-BFC1-08002BE10318}"

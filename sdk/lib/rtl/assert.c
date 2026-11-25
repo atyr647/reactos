@@ -31,6 +31,16 @@ RtlAssert(IN PVOID FailedAssertion,
     /* Capture caller's context for the debugger */
     RtlCaptureContext(&Context);
 
+    /* Bring-up aid: show where we are, since the prompt is not usable on a serial log */
+    {
+        PVOID Frames[24];
+        USHORT n = RtlCaptureStackBackTrace(0, RTL_NUMBER_OF(Frames), Frames, NULL), i;
+        DbgPrint("Assertion backtrace (%u frames):", n);
+        for (i = 0; i < n; i++)
+            DbgPrint(" %p", Frames[i]);
+        DbgPrint("\n");
+    }
+
     /* Enter prompt loop */
     for (;;)
     {

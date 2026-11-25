@@ -174,6 +174,7 @@ VidInitialize(
         return FALSE;
     }
 
+    DPRINT1("bootvid: %lux%lu bpp %lu pixels/line %lu offset %lu\n", ScreenWidth, ScreenHeight, (ULONG)VideoConfigData.BitsPerPixel, (ULONG)VideoConfigData.PixelsPerScanLine, (ULONG)VideoConfigData.FrameBufferOffset);
     ASSERT(ScreenWidth <= VideoConfigData.PixelsPerScanLine);
     BytesPerScanLine = VideoConfigData.PixelsPerScanLine * BytesPerPixel;
     if (BytesPerScanLine < 1)

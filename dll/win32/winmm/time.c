@@ -428,8 +428,9 @@ MMRESULT WINAPI timeBeginPeriod(UINT wPeriod)
     /*  High resolution timer requested, use QPC */
     if (wPeriod <= 5 && TIME_qpcFreq.QuadPart == 0)
     {
-        if (QueryPerformanceFrequency(&TIME_qpcFreq))
-            TIME_qpcFreq.QuadPart /= 1000;
+        LARGE_INTEGER freq;
+        if (QueryPerformanceFrequency(&freq) && freq.QuadPart >= 1000)
+            InterlockedExchange64(&TIME_qpcFreq.QuadPart, freq.QuadPart / 1000);
     }
 
     if (wPeriod > MMSYSTIME_MININTERVAL)
@@ -450,7 +451,7 @@ MMRESULT WINAPI timeEndPeriod(UINT wPeriod)
 
     /*  High resolution timer no longer requested, stop using QPC */
     if (wPeriod <= 5 && TIME_qpcFreq.QuadPart != 0)
-        TIME_qpcFreq.QuadPart = 0;
+        InterlockedExchange64(&TIME_qpcFreq.QuadPart, 0);
 
     if (wPeriod > MMSYSTIME_MININTERVAL)
     {
@@ -475,11 +476,15 @@ DWORD WINAPI timeGetTime(void)
     if (pFnReleaseThunkLock) pFnReleaseThunkLock(&count);
     if (pFnRestoreThunkLock) pFnRestoreThunkLock(count);
 #endif
-    /* Use QPC if a high-resolution timer was requested (<= 5ms) */
-    if (TIME_qpcFreq.QuadPart != 0)
+    /* Use QPC if a high-resolution timer was requested (<= 5ms).
+     * Take a private copy of the frequency: another thread may call
+     * timeEndPeriod() (which zeroes it) between the test and the division,
+     * which would raise a divide-by-zero exception (seen with Chromium). */
+    LONGLONG qpcFreq = *(volatile LONGLONG *)&TIME_qpcFreq.QuadPart;
+    if (qpcFreq > 0)
     {
         QueryPerformanceCounter(&perfCount);
-        return (DWORD)(perfCount.QuadPart / TIME_qpcFreq.QuadPart);
+        return (DWORD)(perfCount.QuadPart / qpcFreq);
     }
     /* Otherwise continue using GetTickCount */
     return GetTickCount();

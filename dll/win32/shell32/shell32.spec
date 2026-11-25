@@ -548,7 +548,7 @@
 @ stdcall SHGetIconOverlayIndexW(wstr long) # 2k3:309, Vista:372
 @ stdcall SHGetInstanceExplorer(long) shcore.GetProcessReference # 2k3:310, Vista:373
 @ stub -version=0x600+ SHGetKnownFolderIDList # Vista:374
-@ stub -version=0x600+ SHGetKnownFolderPath # Vista:375
+@ stdcall -version=0x600+ SHGetKnownFolderPath(ptr long ptr ptr) # Vista:375
 @ stub -version=0x600+ SHGetLocalizedName # Vista:376
 @ stdcall SHGetMalloc(ptr) # 2k3:311, Vista:377
 @ stdcall -version=0x600+ SHGetNameFromIDList(ptr long ptr) # Vista:378
@@ -557,6 +557,7 @@
 @ stdcall SHGetPathFromIDListA(ptr ptr) # 2k3:314, Vista:381
 @ stub -version=0x600+ SHGetPathFromIDListEx # Vista:382
 @ stdcall SHGetPathFromIDListW(ptr ptr) # 2k3:315, Vista:383
+@ stdcall -version=0x600+ SHGetPropertyStoreForWindow(ptr ptr ptr)
 @ stub -version=0x600+ SHGetPropertyStoreFromIDList # Vista:384
 @ stdcall -version=0x600+ SHGetPropertyStoreFromParsingName(wstr ptr ptr ptr ptr) # Vista:385
 @ stdcall SHGetSettings(ptr long) # 2k3:316, Vista:386

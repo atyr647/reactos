@@ -27,6 +27,14 @@
 ULONG ApicVersion;
 UCHAR HalpVectorToIndex[256];
 
+/* Message-signaled interrupts (MSI/MSI-X): a device writes the vector straight to the local APIC, so there is no
+ * I/O APIC pin. HalGetInterruptVector() with a "bus interrupt level" in [HALP_MSI_IRQ_BASE, APIC_RESERVED_VECTOR)
+ * hands out a free IDT vector for it (the same number gives the same vector); HalEnableSystemInterrupt() and
+ * HalDisableSystemInterrupt() then have nothing to program. The driver writes the vector into the device. */
+#define HALP_MSI_IRQ_BASE 0xC0
+#define HalpIsMsiIrq(Irq) ((Irq) >= HALP_MSI_IRQ_BASE && (Irq) < APIC_RESERVED_VECTOR)
+static UCHAR HalpMsiIrqToVector[APIC_RESERVED_VECTOR - HALP_MSI_IRQ_BASE];
+
 #ifndef _M_AMD64
 const UCHAR
 HalpIRQLtoTPR[32] =
@@ -407,6 +415,41 @@ HalpGetRootInterruptVector(
     UCHAR Vector;
     KIRQL Irql;
 
+    if (HalpIsMsiIrq(BusInterruptLevel))
+    {
+        UCHAR Offset;
+
+        /* Already allocated? */
+        Vector = HalpMsiIrqToVector[BusInterruptLevel - HALP_MSI_IRQ_BASE];
+        if (Vector)
+        {
+            *OutIrql = HalpVectorToIrql(Vector);
+            *OutAffinity = HalpDefaultInterruptAffinity;
+            return Vector;
+        }
+
+        /* Find a free vector, highest priority classes (below the clock) first, like for pin interrupts */
+        for (Offset = 0; Offset < 15; Offset++)
+        {
+            for (Irql = CLOCK_LEVEL - 1; Irql >= CMCI_LEVEL; Irql--)
+            {
+                Vector = IrqlToTpr(Irql) + Offset;
+                if (HalpVectorToIrq(Vector) == APIC_FREE_VECTOR)
+                {
+                    HalpVectorToIndex[Vector] = (UCHAR)BusInterruptLevel;
+                    HalpMsiIrqToVector[BusInterruptLevel - HALP_MSI_IRQ_BASE] = Vector;
+                    *OutIrql = Irql;
+                    *OutAffinity = HalpDefaultInterruptAffinity;
+                    return Vector;
+                }
+            }
+        }
+        DPRINT1("Failed to get an MSI vector for %lu\n", BusInterruptLevel);
+        *OutAffinity = 0;
+        *OutIrql = 0;
+        return 0;
+    }
+
     /* Get the vector currently registered */
     Vector = HalpIrqToVector(BusInterruptLevel);
 
@@ -689,6 +732,10 @@ HalEnableSystemInterrupt(
         return FALSE;
     }
 
+    /* Message-signaled: the device itself targets the vector, nothing to enable here */
+    if (HalpIsMsiIrq(Index))
+        return TRUE;
+
     /* Read the redirection entry */
     ReDirReg = ApicReadIORedirectionEntry(Index);
 
@@ -727,6 +774,10 @@ HalDisableSystemInterrupt(
     ASSERT(Vector < RTL_NUMBER_OF(HalpVectorToIndex));
 
     Index = HalpVectorToIndex[Vector];
+
+    /* Message-signaled interrupts have no redirection entry (the driver masks them in the device) */
+    if (HalpIsMsiIrq(Index))
+        return;
 
     /* Read lower dword of redirection entry */
     ReDirReg.Long0 = IOApicRead(IOAPIC_REDTBL + 2 * Index);
@@ -770,7 +821,11 @@ HalBeginSystemInterrupt(
         Index = HalpVectorToIndex[Vector];
 
         /* Check if it's valid */
-        if (Index < APIC_MAX_IRQ)
+        if (HalpIsMsiIrq(Index))
+        {
+            ApicRequestSelfInterrupt(Vector, APIC_TGM_Edge);
+        }
+        else if (Index < APIC_MAX_IRQ)
         {
             /* Read the I/O redirection entry */
             RedirReg = ApicReadIORedirectionEntry(Index);

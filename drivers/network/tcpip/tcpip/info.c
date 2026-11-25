@@ -20,6 +20,13 @@ VOID AddEntity(ULONG EntityType, PVOID Context, ULONG Flags)
 
     TcpipAcquireSpinLock(&EntityListLock, &OldIrql);
 
+    if (EntityCount >= EntityMax)
+    {
+        /* The list is full, don't write past the end of it */
+        TcpipReleaseSpinLock(&EntityListLock, OldIrql);
+        return;
+    }
+
     while (!ChoseIndex)
     {
          ChoseIndex = TRUE;

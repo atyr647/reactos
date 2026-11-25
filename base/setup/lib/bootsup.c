@@ -1479,6 +1479,51 @@ InstallVBRToPartition(
  *
  * @return  An NTSTATUS code indicating success or failure.
  **/
+/*
+ * UEFI: FreeLoader's UEFI build is the firmware's fallback boot file \EFI\BOOT\BOOTX64.EFI on the FAT volume of
+ * the system partition (no NVRAM boot entry is written), with 'freeldr.ini' at the volume root.
+ */
+static
+NTSTATUS
+InstallEfiBootManager(
+    _In_ PCUNICODE_STRING SystemRootPath,
+    _In_ PCUNICODE_STRING SourceRootPath,
+    _In_ PCUNICODE_STRING DestinationArcPath,
+    _In_ PCWSTR FileSystem)
+{
+    NTSTATUS Status;
+    WCHAR SrcPath[MAX_PATH];
+    WCHAR DstPath[MAX_PATH];
+
+    /* The firmware only reads FAT */
+    if (_wcsnicmp(FileSystem, L"FAT", 3) != 0)
+        return STATUS_NOT_SUPPORTED;
+
+    CombinePaths(DstPath, ARRAYSIZE(DstPath), 2, SystemRootPath->Buffer, L"EFI");
+    Status = SetupCreateDirectory(DstPath);
+    if (!NT_SUCCESS(Status) && Status != STATUS_OBJECT_NAME_COLLISION)
+        return Status;
+    CombinePaths(DstPath, ARRAYSIZE(DstPath), 2, SystemRootPath->Buffer, L"EFI\\BOOT");
+    Status = SetupCreateDirectory(DstPath);
+    if (!NT_SUCCESS(Status) && Status != STATUS_OBJECT_NAME_COLLISION)
+        return Status;
+
+    CombinePaths(SrcPath, ARRAYSIZE(SrcPath), 2, SourceRootPath->Buffer, L"\\efi\\boot\\bootx64.efi");
+    CombinePaths(DstPath, ARRAYSIZE(DstPath), 2, SystemRootPath->Buffer, L"EFI\\BOOT\\BOOTX64.EFI");
+    DPRINT1("Copy: %S ==> %S\n", SrcPath, DstPath);
+    Status = SetupCopyFile(SrcPath, DstPath, FALSE);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("SetupCopyFile(bootx64.efi) failed (Status 0x%08lx)\n", Status);
+        return Status;
+    }
+
+    Status = CreateFreeLoaderIniForReactOS(SystemRootPath->Buffer, DestinationArcPath->Buffer);
+    if (!NT_SUCCESS(Status))
+        DPRINT1("CreateFreeLoaderIniForReactOS() failed (Status 0x%08lx)\n", Status);
+    return Status;
+}
+
 static
 NTSTATUS
 InstallBootManagerAndBootEntriesWorker(
@@ -1496,7 +1541,10 @@ InstallBootManagerAndBootEntriesWorker(
     BOOLEAN IsBIOS = ((ArchType == ARCH_PcAT) || (ArchType == ARCH_NEC98x86));
     UCHAR InstallType = (Options & 0x03);
 
-    // FIXME: We currently only support BIOS-based PCs
+    if (ArchType == ARCH_Efi)
+        return InstallEfiBootManager(SystemRootPath, SourceRootPath, DestinationArcPath, FileSystem);
+
+    // FIXME: We currently only support BIOS-based and UEFI PCs
     // TODO: Support other platforms
     if (!IsBIOS)
         return STATUS_NOT_SUPPORTED;

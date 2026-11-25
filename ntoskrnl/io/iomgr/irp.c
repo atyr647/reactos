@@ -381,9 +381,23 @@ IopCompleteRequest(IN PKAPC Apc,
         /* Get any information we need from the FO before we kill it */
         if ((FileObject) && (FileObject->CompletionContext))
         {
-            /* Save Completion Data */
-            Port = FileObject->CompletionContext->Port;
-            Key = FileObject->CompletionContext->Key;
+            /*
+             * With FILE_SKIP_COMPLETION_PORT_ON_SUCCESS, an operation that completed
+             * synchronously with success must not queue a completion packet: the caller
+             * is told about the result by the return value of the call itself.
+             */
+            if ((FileObject->Flags & FO_SKIP_COMPLETION_PORT) &&
+                !Irp->PendingReturned &&
+                NT_SUCCESS(Irp->IoStatus.Status))
+            {
+                Port = NULL;
+            }
+            else
+            {
+                /* Save Completion Data */
+                Port = FileObject->CompletionContext->Port;
+                Key = FileObject->CompletionContext->Key;
+            }
         }
 
         IopWriteAsyncUserIosb(Irp);
@@ -431,8 +445,13 @@ IopCompleteRequest(IN PKAPC Apc,
         }
         else if (FileObject)
         {
-            /* Signal the file object and set the status */
-            KeSetEvent(&FileObject->Event, 0, FALSE);
+            /*
+             * Signal the file object (unless told not to) and set the status.
+             * FILE_SKIP_SET_EVENT_ON_HANDLE only concerns the caller's view of the handle:
+             * for synchronous file objects the I/O manager itself waits on this event.
+             */
+            if (!(FileObject->Flags & FO_SKIP_SET_EVENT) || (FileObject->Flags & FO_SYNCHRONOUS_IO))
+                KeSetEvent(&FileObject->Event, 0, FALSE);
             FileObject->FinalStatus = Irp->IoStatus.Status;
 
             /*

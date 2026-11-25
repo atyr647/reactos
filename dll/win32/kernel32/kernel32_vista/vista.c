@@ -615,6 +615,92 @@ GetFileMUIPath(
 }
 
 /*
+ * Shared implementation for the Get{System,User,Thread}PreferredUILanguages family.
+ * Returns the current UI language as a double-NUL-terminated multi-string, either in
+ * "en-US" name form (MUI_LANGUAGE_NAME) or as 4 hex digits (MUI_LANGUAGE_ID). When a
+ * fallback is requested, "en-US" is appended (once) after the primary language.
+ */
+static BOOL
+BasepGetPreferredUILanguages(
+    DWORD dwFlags,
+    LANGID LangId,
+    PULONG pulNumLanguages,
+    PZZWSTR pwszLanguagesBuffer,
+    PULONG pcchLanguagesBuffer)
+{
+    WCHAR Names[2][LOCALE_NAME_MAX_LENGTH];
+    WCHAR Joined[2 * LOCALE_NAME_MAX_LENGTH + 1];
+    ULONG Count = 0, Length = 0, i;
+    const ULONG ValidFlags = MUI_LANGUAGE_ID | MUI_LANGUAGE_NAME | MUI_MERGE_SYSTEM_FALLBACK |
+                             MUI_MERGE_USER_FALLBACK | MUI_UI_FALLBACK | MUI_THREAD_LANGUAGES |
+                             MUI_CONSOLE_FILTER | MUI_COMPLEX_SCRIPT_FILTER | MUI_RESET_FILTERS |
+                             MUI_USER_PREFERRED_UI_LANGUAGES | MUI_USE_INSTALLED_LANGUAGES |
+                             MUI_USE_SEARCH_ALL_LANGUAGES | MUI_LANG_NEUTRAL_PE_FILE |
+                             MUI_NON_LANG_NEUTRAL_FILE | MUI_MACHINE_LANGUAGE_SETTINGS;
+
+    if (!pulNumLanguages || !pcchLanguagesBuffer ||
+        (dwFlags & ~ValidFlags) ||
+        ((dwFlags & MUI_LANGUAGE_ID) && (dwFlags & MUI_LANGUAGE_NAME)) ||
+        (*pcchLanguagesBuffer && !pwszLanguagesBuffer))
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    if (!LangId) LangId = MAKELANGID(LANG_ENGLISH, SUBLANG_ENGLISH_US);
+
+    for (i = 0; i < 2; i++)
+    {
+        LANGID Id = (i == 0) ? LangId : MAKELANGID(LANG_ENGLISH, SUBLANG_ENGLISH_US);
+
+        /* Only add the English fallback if it was asked for and differs from the primary */
+        if (i == 1 && (!(dwFlags & (MUI_MERGE_SYSTEM_FALLBACK | MUI_MERGE_USER_FALLBACK)) || Id == LangId))
+            break;
+
+        if (dwFlags & MUI_LANGUAGE_ID)
+        {
+            static const WCHAR Hex[] = L"0123456789ABCDEF";
+            Names[i][0] = Hex[(Id >> 12) & 0xF];
+            Names[i][1] = Hex[(Id >> 8) & 0xF];
+            Names[i][2] = Hex[(Id >> 4) & 0xF];
+            Names[i][3] = Hex[Id & 0xF];
+            Names[i][4] = UNICODE_NULL;
+        }
+        else if (!LCIDToLocaleName(MAKELCID(Id, SORT_DEFAULT), Names[i], LOCALE_NAME_MAX_LENGTH, 0))
+        {
+            /* Name tables don't know this language: fall back to US English */
+            wcscpy(Names[i], L"en-US");
+        }
+
+        wcscpy(&Joined[Length], Names[i]);
+        Length += wcslen(Names[i]) + 1;
+        Count++;
+    }
+
+    Joined[Length++] = UNICODE_NULL;
+
+    if (*pcchLanguagesBuffer == 0)
+    {
+        /* Size query */
+        *pulNumLanguages = Count;
+        *pcchLanguagesBuffer = Length;
+        return TRUE;
+    }
+
+    if (*pcchLanguagesBuffer < Length)
+    {
+        *pcchLanguagesBuffer = Length;
+        SetLastError(ERROR_INSUFFICIENT_BUFFER);
+        return FALSE;
+    }
+
+    RtlCopyMemory(pwszLanguagesBuffer, Joined, Length * sizeof(WCHAR));
+    *pulNumLanguages = Count;
+    *pcchLanguagesBuffer = Length;
+    return TRUE;
+}
+
+/*
  * @unimplemented
  */
 #if 0 // This is Windows 7+
@@ -643,9 +729,8 @@ GetSystemPreferredUILanguages(
     PZZWSTR pwszLanguagesBuffer,
     PULONG pcchLanguagesBuffer)
 {
-    DPRINT1("%x %p %p %p\n", dwFlags, pulNumLanguages, pwszLanguagesBuffer, pcchLanguagesBuffer);
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return FALSE;
+    return BasepGetPreferredUILanguages(dwFlags, GetSystemDefaultUILanguage(),
+                                        pulNumLanguages, pwszLanguagesBuffer, pcchLanguagesBuffer);
 }
 
 /*
@@ -659,9 +744,8 @@ GetThreadPreferredUILanguages(
     PZZWSTR pwszLanguagesBuffer,
     PULONG pcchLanguagesBuffer)
 {
-    DPRINT1("%x %p %p %p\n", dwFlags, pulNumLanguages, pwszLanguagesBuffer, pcchLanguagesBuffer);
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return FALSE;
+    return BasepGetPreferredUILanguages(dwFlags, GetUserDefaultUILanguage(),
+                                        pulNumLanguages, pwszLanguagesBuffer, pcchLanguagesBuffer);
 }
 
 /*
@@ -671,9 +755,7 @@ LANGID
 WINAPI
 GetThreadUILanguage(VOID)
 {
-    UNIMPLEMENTED;
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return 0;
+    return GetUserDefaultUILanguage();
 }
 
 /*
@@ -705,9 +787,8 @@ GetUserPreferredUILanguages(
     PZZWSTR pwszLanguagesBuffer,
     PULONG pcchLanguagesBuffer)
 {
-    DPRINT1("%x %p %p %p\n", dwFlags, pulNumLanguages, pwszLanguagesBuffer, pcchLanguagesBuffer);
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return FALSE;
+    return BasepGetPreferredUILanguages(dwFlags, GetUserDefaultUILanguage(),
+                                        pulNumLanguages, pwszLanguagesBuffer, pcchLanguagesBuffer);
 }
 
 /*
@@ -738,9 +819,9 @@ SetThreadPreferredUILanguages(
     PULONG pulNumLanguages
     )
 {
-    DPRINT1("%x %p %p\n", dwFlags, pwszLanguagesBuffer, pulNumLanguages);
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return FALSE;
+    /* Per-thread overrides are not tracked; report that the (single) language was accepted */
+    if (pulNumLanguages) *pulNumLanguages = 0;
+    return TRUE;
 }
 
 /******************************************************************************
@@ -761,4 +842,27 @@ INT WINAPI CompareStringOrdinal(const WCHAR *str1, INT len1, const WCHAR *str2, 
     if (ret < 0) return CSTR_LESS_THAN;
     if (ret > 0) return CSTR_GREATER_THAN;
     return CSTR_EQUAL;
+}
+
+/*
+ * Safe DLL search directories: the loader has no per-process user directory list yet, so these only
+ * hand out a non-NULL cookie and report success (callers use them to widen the LOAD_LIBRARY_SEARCH_* set).
+ */
+DLL_DIRECTORY_COOKIE
+WINAPI
+AddDllDirectory(PCWSTR NewDirectory)
+{
+    if (!NewDirectory)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return NULL;
+    }
+    return (DLL_DIRECTORY_COOKIE)(ULONG_PTR)1;
+}
+
+BOOL
+WINAPI
+RemoveDllDirectory(DLL_DIRECTORY_COOKIE Cookie)
+{
+    return Cookie != NULL;
 }

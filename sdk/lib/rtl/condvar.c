@@ -97,6 +97,7 @@ InternalLockCondVar(IN OUT PRTL_CONDITION_VARIABLE ConditionVariable,
        return NULL instead of continuing the wait. */
 
     ULONG_PTR OldVal = (ULONG_PTR)ConditionVariable->Ptr;
+    ULONG SpinCount = 0;
 
     for (;;)
     {
@@ -108,7 +109,26 @@ InternalLockCondVar(IN OUT PRTL_CONDITION_VARIABLE ConditionVariable,
             /* The locked flag is set, indicating someone else currently
                holds the lock. We'll spin until this flag becomes
                clear or we're asked to abort. */
-            YieldProcessor();
+            if (++SpinCount < 64)
+            {
+                YieldProcessor();
+            }
+            else
+            {
+                /* The owner may be waiting for the CPU (single processor or lower
+                   priority), so give it up instead of burning the time slice. */
+                LARGE_INTEGER Interval;
+
+                if (SpinCount < 192)
+                {
+                    NtYieldExecution();
+                }
+                else
+                {
+                    Interval.QuadPart = -10000; /* 1 ms */
+                    NtDelayExecution(FALSE, &Interval);
+                }
+            }
 
             if ((AbortIfLocked != NULL) && *AbortIfLocked)
             {

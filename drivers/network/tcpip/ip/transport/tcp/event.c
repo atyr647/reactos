@@ -332,9 +332,12 @@ TCPSendEventHandler(void *arg, const u16_t space)
          ("Connection->SocketContext: %x\n",
           Connection->SocketContext));
 
+        /* LibTCPSend takes a 16-bit length: a bigger request used to be truncated
+         * (65536 became 0) and complete with zero bytes sent. Send what fits;
+         * the caller handles partial sends. */
         Status = TCPTranslateError(LibTCPSend(Connection,
                                               SendBuffer,
-                                              SendLen, &BytesSent, TRUE));
+                                              min(SendLen, 0xFFFFU), &BytesSent, TRUE));
 
         TI_DbgPrint(DEBUG_TCP,("TCP Bytes: %d\n", BytesSent));
 

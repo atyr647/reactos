@@ -908,6 +908,10 @@ IntWindowFromDC(HDC hDc)
             Ret = NULL;
          else
             Ret = Dce->hwndCurrent;
+
+         /* A DC obtained with GetDC(NULL) is the screen DC, which belongs to the desktop window */
+         if (!Ret && (Dce->DCXFlags & DCX_DCEBUSY) && !(Dce->DCXFlags & DCX_INDESTROY))
+            Ret = IntGetDesktopWindow();
          break;
       }
   }

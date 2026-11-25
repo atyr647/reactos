@@ -8,6 +8,7 @@
  */
 
 #include "mouclass.h"
+#include <reactos/drivers/lkpiinput.h>
 
 #include <stdio.h>
 #include <kbdmou.h>
@@ -19,6 +20,13 @@ static DRIVER_DISPATCH ClassCreate;
 static DRIVER_DISPATCH ClassClose;
 static DRIVER_DISPATCH ClassCleanup;
 static DRIVER_DISPATCH ClassRead;
+static BOOLEAN NTAPI
+ClassCallback(
+    IN PDEVICE_OBJECT ClassDeviceObject,
+    IN OUT PMOUSE_INPUT_DATA DataStart,
+    IN PMOUSE_INPUT_DATA DataEnd,
+    IN OUT PULONG ConsumedCount);
+
 static DRIVER_DISPATCH ClassDeviceControl;
 static DRIVER_DISPATCH ClassPower;
 static DRIVER_ADD_DEVICE ClassAddDevice;
@@ -148,6 +156,19 @@ ClassDeviceControl(
                 IoSkipCurrentIrpStackLocation(Irp);
                 return IoCallDriver(DevExt->DeviceObject, Irp);
             }
+            break;
+        }
+        case IOCTL_LKPI_MOUSE_INJECT:
+        {
+            /* LinuxKPI input bridge: inject events as if a port driver had reported them */
+            PIO_STACK_LOCATION IoStack = IoGetCurrentIrpStackLocation(Irp);
+            PMOUSE_INPUT_DATA Data = Irp->AssociatedIrp.SystemBuffer;
+            ULONG Count = IoStack->Parameters.DeviceIoControl.InputBufferLength / sizeof(MOUSE_INPUT_DATA);
+            ULONG Consumed = 0;
+
+            if (Data && Count)
+                ClassCallback(DeviceObject, Data, Data + Count, &Consumed);
+            Status = STATUS_SUCCESS;
             break;
         }
         default:

@@ -818,8 +818,10 @@ InitSystemPartition(
      * If we install on a fixed disk, try to find a supported system
      * partition on the system. Otherwise if we install on a removable disk
      * use the install partition as the system partition.
+     * Under UEFI no disk is a "BIOS disk" (there is no active-partition boot), and the firmware
+     * boots \EFI\BOOT\BOOTX64.EFI from a FAT volume: use the install partition as well.
      */
-    if (InstallPartition->DiskEntry->MediaType == FixedMedia)
+    if ((InstallPartition->DiskEntry->MediaType == FixedMedia) && !IsUefiFirmware())
     {
         SystemPartition = FindSupportedSystemPartition(PartitionList,
                                                        FALSE,
@@ -1047,6 +1049,16 @@ InitDestinationPaths(
 #endif
             DPRINT1("Fixed disk found by BIOS, using MULTI ARC path '%S'\n", PathBuffer);
         }
+        else if (IsUefiFirmware())
+        {
+            /* FreeLoader's UEFI port numbers the disks (rdisk) in the order the firmware lists them and does not
+             * know scsi() adapters: Setup's disk number is the best available guess */
+            Status = RtlStringCchPrintfW(PathBuffer, ARRAYSIZE(PathBuffer),
+                             L"multi(0)disk(0)rdisk(%lu)partition(%lu)\\",
+                             DiskEntry->DiskNumber,
+                             PartEntry->OnDiskPartitionNumber);
+            DPRINT1("UEFI system, using MULTI ARC path '%S'\n", PathBuffer);
+        }
         else
         {
             Status = RtlStringCchPrintfW(PathBuffer, ARRAYSIZE(PathBuffer),
@@ -1219,11 +1231,53 @@ InitializeSetup(
 #if defined(SARCH_XBOX)
     pSetupData->ArchType = ARCH_Xbox;
 // #elif defined(SARCH_PC98)
-#else // TODO: Arc, UEFI
-    pSetupData->ArchType = (IsNEC_98 ? ARCH_NEC98x86 : ARCH_PcAT);
+#else // TODO: Arc
+    if (IsUefiFirmware())
+        pSetupData->ArchType = ARCH_Efi;
+    else
+        pSetupData->ArchType = (IsNEC_98 ? ARCH_NEC98x86 : ARCH_PcAT);
 #endif
 
     return ERROR_SUCCESS;
+}
+
+/*
+ * Whether the firmware tree says we were booted through UEFI (FreeLoader's UEFI port creates
+ * a MultifunctionAdapter called "UEFI Internal").
+ */
+BOOLEAN
+IsUefiFirmware(VOID)
+{
+    ULONG i;
+
+    for (i = 0; i < 8; i++)
+    {
+        WCHAR Path[128];
+        UNICODE_STRING Name, Value = RTL_CONSTANT_STRING(L"Identifier");
+        OBJECT_ATTRIBUTES Oa;
+        HANDLE Key;
+        UCHAR Buf[sizeof(KEY_VALUE_PARTIAL_INFORMATION) + 64 * sizeof(WCHAR)];
+        PKEY_VALUE_PARTIAL_INFORMATION Info = (PKEY_VALUE_PARTIAL_INFORMATION)Buf;
+        ULONG Len;
+        BOOLEAN Found = FALSE;
+
+        RtlStringCbPrintfW(Path, sizeof(Path),
+                           L"\\Registry\\Machine\\HARDWARE\\DESCRIPTION\\System\\MultifunctionAdapter\\%lu", i);
+        RtlInitUnicodeString(&Name, Path);
+        InitializeObjectAttributes(&Oa, &Name, OBJ_CASE_INSENSITIVE, NULL, NULL);
+        if (!NT_SUCCESS(NtOpenKey(&Key, KEY_QUERY_VALUE, &Oa)))
+            continue;
+        if (NT_SUCCESS(NtQueryValueKey(Key, &Value, KeyValuePartialInformation, Buf, sizeof(Buf) - sizeof(WCHAR), &Len)) &&
+            Info->Type == REG_SZ)
+        {
+            ((PWCHAR)Info->Data)[Info->DataLength / sizeof(WCHAR)] = 0;
+            Found = !_wcsicmp((PWCHAR)Info->Data, L"UEFI Internal");
+        }
+        NtClose(Key);
+        if (Found)
+            return TRUE;
+    }
+    return FALSE;
 }
 
 VOID

@@ -1942,19 +1942,19 @@ WSPGetAcceptExSockaddrs(
     OUT LPINT RemoteSockaddrLength)
 {
     /* AFD_SUPER_ACCEPT outputs receive data + local address + local address length + remote address + remote address length */
-    /* Length is located 2 bytes before address length */
+    /* Length is a USHORT stored in the last two bytes of each address area */
     BYTE* LocalAddress = (BYTE *)lpOutputBuffer + dwReceiveDataLength;
     if (dwLocalAddressLength)
     {
         *LocalSockaddr = (struct sockaddr *)LocalAddress;
-        *LocalSockaddrLength = *(UINT*)(LocalAddress + dwLocalAddressLength - sizeof(WORD));
+        *LocalSockaddrLength = (INT)*(USHORT*)(LocalAddress + dwLocalAddressLength - sizeof(WORD));
     }
 
     if (dwRemoteAddressLength)
     {
         BYTE* RemoteAddress = LocalAddress + dwLocalAddressLength;
         *RemoteSockaddr = (struct sockaddr *)RemoteAddress;
-        *RemoteSockaddrLength = *(UINT*)(RemoteAddress + dwRemoteAddressLength - sizeof(WORD));
+        *RemoteSockaddrLength = (INT)*(USHORT*)(RemoteAddress + dwRemoteAddressLength - sizeof(WORD));
     }
 }
 

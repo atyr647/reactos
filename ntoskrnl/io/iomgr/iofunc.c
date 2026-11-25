@@ -13,6 +13,19 @@
 
 #include <ntoskrnl.h>
 #include <ioevent.h>
+/* Vista+ file information class and flags, not visible with the NT 5.2 SDK headers */
+#define IOP_FILE_IO_COMPLETION_NOTIFICATION_INFORMATION 41
+#ifndef FILE_SKIP_COMPLETION_PORT_ON_SUCCESS
+#define FILE_SKIP_COMPLETION_PORT_ON_SUCCESS 0x1
+#endif
+#ifndef FILE_SKIP_SET_EVENT_ON_HANDLE
+#define FILE_SKIP_SET_EVENT_ON_HANDLE 0x2
+#endif
+#ifndef FO_SKIP_COMPLETION_PORT
+#define FO_SKIP_COMPLETION_PORT 0x02000000
+#define FO_SKIP_SET_EVENT       0x04000000
+#endif
+
 #define NDEBUG
 #include <debug.h>
 #include "internal/io_i.h"
@@ -3124,7 +3137,7 @@ NtSetInformationFile(IN HANDLE FileHandle,
     {
         /* Validate the information class */
         if ((FileInformationClass < 0) ||
-            (FileInformationClass >= FileMaximumInformation) ||
+            ((ULONG)FileInformationClass > IOP_FILE_IO_COMPLETION_NOTIFICATION_INFORMATION) ||
             !(IopSetOperationLength[FileInformationClass]))
         {
             /* Invalid class */
@@ -3161,7 +3174,7 @@ NtSetInformationFile(IN HANDLE FileHandle,
     {
         /* Validate the information class */
         if ((FileInformationClass < 0) ||
-            (FileInformationClass >= FileMaximumInformation) ||
+            ((ULONG)FileInformationClass > IOP_FILE_IO_COMPLETION_NOTIFICATION_INFORMATION) ||
             !(IopSetOperationLength[FileInformationClass]))
         {
             /* Invalid class */
@@ -3369,6 +3382,29 @@ NtSetInformationFile(IN HANDLE FileHandle,
                     Status = STATUS_INSUFFICIENT_RESOURCES;
                 }
             }
+        }
+
+        /* Set the IRP Status */
+        Irp->IoStatus.Status = Status;
+        Irp->IoStatus.Information = 0;
+    }
+    else if ((ULONG)FileInformationClass == IOP_FILE_IO_COMPLETION_NOTIFICATION_INFORMATION)
+    {
+        /* FILE_IO_COMPLETION_NOTIFICATION_INFORMATION is a single ULONG of flags */
+        ULONG Flags = *(PULONG)Irp->AssociatedIrp.SystemBuffer;
+
+        /* Only the documented flags are valid; the I/O manager handles them itself */
+        if (Flags & ~(FILE_SKIP_COMPLETION_PORT_ON_SUCCESS | FILE_SKIP_SET_EVENT_ON_HANDLE))
+        {
+            Status = STATUS_INVALID_PARAMETER;
+        }
+        else
+        {
+            if (Flags & FILE_SKIP_COMPLETION_PORT_ON_SUCCESS)
+                InterlockedOr((PLONG)&FileObject->Flags, FO_SKIP_COMPLETION_PORT);
+            if (Flags & FILE_SKIP_SET_EVENT_ON_HANDLE)
+                InterlockedOr((PLONG)&FileObject->Flags, FO_SKIP_SET_EVENT);
+            Status = STATUS_SUCCESS;
         }
 
         /* Set the IRP Status */

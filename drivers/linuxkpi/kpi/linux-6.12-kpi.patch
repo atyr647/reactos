@@ -1,0 +1,171 @@
+--- a/arch/x86/include/asm/cpufeature.h	2024-11-17 22:15:08.000000000 +0000
++++ b/arch/x86/include/asm/cpufeature.h	2026-11-04 12:27:49.363164823 +0000
+@@ -192,12 +192,7 @@
+ 	return false;
+ }
+ 
+-#define static_cpu_has(bit)					\
+-(								\
+-	__builtin_constant_p(boot_cpu_has(bit)) ?		\
+-		boot_cpu_has(bit) :				\
+-		_static_cpu_has(bit)				\
+-)
++#define static_cpu_has(bit) boot_cpu_has(bit) /* LinuxKPI: position independent modules */
+ 
+ #define cpu_has_bug(c, bit)		cpu_has(c, (bit))
+ #define set_cpu_bug(c, bit)		set_cpu_cap(c, (bit))
+--- a/arch/x86/include/asm/page_64.h	2024-11-17 22:15:08.000000000 +0000
++++ b/arch/x86/include/asm/page_64.h	2026-11-04 12:31:54.064254888 +0000
+@@ -51,12 +51,7 @@
+ 	 * below clobbers @page, so we perform unpoisoning before it.
+ 	 */
+ 	kmsan_unpoison_memory(page, PAGE_SIZE);
+-	alternative_call_2(clear_page_orig,
+-			   clear_page_rep, X86_FEATURE_REP_GOOD,
+-			   clear_page_erms, X86_FEATURE_ERMS,
+-			   "=D" (page),
+-			   "D" (page)
+-			   : "cc", "memory", "rax", "rcx");
++	__builtin_memset(page, 0, PAGE_SIZE); /* LinuxKPI: no alternatives */
+ }
+ 
+ void copy_page(void *to, void *from);
+--- a/arch/x86/include/asm/alternative.h	2024-11-17 22:15:08.000000000 +0000
++++ b/arch/x86/include/asm/alternative.h	2024-11-17 22:15:08.000000000 +0000
+@@ -50,8 +50,9 @@
+ #define LOCK_PREFIX LOCK_PREFIX_HERE "\n\tlock; "
+ 
+ #else /* ! CONFIG_SMP */
++/* LinuxKPI: modules are built !SMP but run on every CPU of the host: atomic operations must stay locked */
+ #define LOCK_PREFIX_HERE ""
+-#define LOCK_PREFIX ""
++#define LOCK_PREFIX "\n\tlock; "
+ #endif
+ 
+ /*
+@@ -307,6 +308,7 @@
+ 	.endm
+ #else
+ 	.macro LOCK_PREFIX
++	lock	/* LinuxKPI: see LOCK_PREFIX above */
+ 	.endm
+ #endif
+ 
+--- a/include/asm-generic/barrier.h	2024-11-17 22:15:08.000000000 +0000
++++ b/include/asm-generic/barrier.h	2024-11-17 22:15:08.000000000 +0000
+@@ -109,8 +109,9 @@
+ 
+ #else	/* !CONFIG_SMP */
+ 
++/* LinuxKPI: built !SMP but run on several CPUs, so smp_mb() must order stores against later loads */
+ #ifndef smp_mb
+-#define smp_mb()	barrier()
++#define smp_mb()	__smp_mb()
+ #endif
+ 
+ #ifndef smp_rmb
+--- a/drivers/gpu/drm/amd/display/amdgpu_dm/dc_fpu.c
++++ b/drivers/gpu/drm/amd/display/amdgpu_dm/dc_fpu.c
+@@ -39,7 +39,7 @@
+  * management.
+  */
+ 
+-static DEFINE_PER_CPU(int, fpu_recursion_depth);
++/* LinuxKPI: no per-CPU recursion depth here, see dc_fpu_begin() */
+ 
+ /**
+  * dc_assert_fp_enabled - Check if FPU protection is enabled
+@@ -51,11 +51,7 @@
+  */
+ inline void dc_assert_fp_enabled(void)
+ {
+-	int depth;
+-
+-	depth = __this_cpu_read(fpu_recursion_depth);
+-
+-	ASSERT(depth >= 1);
++	/* LinuxKPI: the nesting depth is kept per CPU by the host's kernel_fpu_begin(), not here (see dc_fpu_begin) */
+ }
+ 
+ /**
+@@ -73,17 +69,13 @@
+  */
+ void dc_fpu_begin(const char *function_name, const int line)
+ {
+-	int depth;
+-
+-	WARN_ON_ONCE(!in_task());
+-	preempt_disable();
+-	depth = __this_cpu_inc_return(fpu_recursion_depth);
+-	if (depth == 1) {
+-		BUG_ON(!kernel_fpu_available());
+-		kernel_fpu_begin();
+-	}
+-
+-	TRACE_DCN_FPU(true, function_name, line, depth);
++	/*
++	 * LinuxKPI: built !SMP, so the per-CPU recursion depth would be one counter shared by every CPU. The host's
++	 * kernel_fpu_begin() counts nesting per CPU itself (and stays on this CPU until the outermost end), so call it
++	 * every time.
++	 */
++	kernel_fpu_begin();
++	TRACE_DCN_FPU(true, function_name, line, 1);
+ }
+ 
+ /**
+@@ -98,15 +90,6 @@
+  */
+ void dc_fpu_end(const char *function_name, const int line)
+ {
+-	int depth;
+-
+-	depth = __this_cpu_dec_return(fpu_recursion_depth);
+-	if (depth == 0) {
+-		kernel_fpu_end();
+-	} else {
+-		WARN_ON_ONCE(depth < 0);
+-	}
+-
+-	TRACE_DCN_FPU(false, function_name, line, depth);
+-	preempt_enable();
++	kernel_fpu_end();	/* LinuxKPI: see dc_fpu_begin() */
++	TRACE_DCN_FPU(false, function_name, line, 0);
+ }
+--- a/arch/x86/Makefile
++++ b/arch/x86/Makefile
+@@ -95,7 +95,9 @@
+ #
+ # can be triggered. Otherwise gcc doesn't complain.
+ CC_FLAGS_FPU += -mhard-float
+-CC_FLAGS_FPU += $(call cc-option,-msse -mpreferred-stack-boundary=3,-mpreferred-stack-boundary=4)
++# LinuxKPI: the modules run under the Windows x64 ABI's 16-byte stack alignment (KCFLAGS); FP code calls into the
++# host like any other code, so it must not drop to 8
++CC_FLAGS_FPU += -mpreferred-stack-boundary=4
+ endif
+ 
+ ifeq ($(CONFIG_X86_KERNEL_IBT),y)
+--- a/drivers/gpu/drm/tiny/bochs.c
++++ b/drivers/gpu/drm/tiny/bochs.c
+@@ -348,7 +348,9 @@
+ 	bochs_dispi_write(bochs, VBE_DISPI_INDEX_Y_OFFSET,    0);
+ 
+ 	bochs_dispi_write(bochs, VBE_DISPI_INDEX_ENABLE,
+-			  VBE_DISPI_ENABLED | VBE_DISPI_LFB_ENABLED);
++			  VBE_DISPI_ENABLED | VBE_DISPI_LFB_ENABLED |
++			  VBE_DISPI_NOCLEARMEM);	/* LinuxKPI: the device would clear VRAM from offset 0, i.e.
++						 * whichever buffer TTM placed there (the desktop's) */
+ 
+ 	drm_dev_exit(idx);
+ }
+--- a/drivers/gpu/drm/vgem/vgem_drv.c
++++ b/drivers/gpu/drm/vgem/vgem_drv.c
+@@ -109,7 +109,8 @@
+ }
+ 
+ static const struct drm_driver vgem_driver = {
+-	.driver_features		= DRIVER_GEM | DRIVER_RENDER,
++	/* LinuxKPI: syncobjs too, for the buffer and fence sharing test (vgem is a test driver here, not shipped) */
++	.driver_features		= DRIVER_GEM | DRIVER_RENDER | DRIVER_SYNCOBJ | DRIVER_SYNCOBJ_TIMELINE,
+ 	.open				= vgem_open,
+ 	.postclose			= vgem_postclose,
+ 	.ioctls				= vgem_ioctls,
